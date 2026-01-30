@@ -74,7 +74,7 @@ class DrawingToolbar extends StatelessWidget {
     return Row(
       children: [
         const Text(
-          'Layers: ',
+          'Visibility: ',
           style: TextStyle(
             fontSize: 12,
             fontWeight: FontWeight.w500,
@@ -88,47 +88,42 @@ class DrawingToolbar extends StatelessWidget {
           
           return Padding(
             padding: const EdgeInsets.only(right: 4),
-            child: Container(
-              decoration: BoxDecoration(
-                color: isActive
-                    ? const Color(0xFF8B7355)
-                    : Colors.white,
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(
-                  color: const Color(0xFF8B7355),
-                  width: isActive ? 2 : 1,
+            child: GestureDetector(
+              onTap: () => onVisibilityToggled(index),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  color: layer.visible
+                      ? (isActive ? const Color(0xFF8B7355) : Colors.white)
+                      : Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                    color: const Color(0xFF8B7355),
+                    width: isActive ? 2 : 1,
+                  ),
                 ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Eye icon — tap to toggle visibility
-                  GestureDetector(
-                    onTap: () => onVisibilityToggled(index),
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 6, top: 4, bottom: 4, right: 2),
-                      child: Icon(
-                        layer.visible ? Icons.visibility : Icons.visibility_off,
-                        size: 14,
-                        color: isActive ? Colors.white : const Color(0xFF4A3F35),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      layer.visible ? Icons.visibility : Icons.visibility_off,
+                      size: 16,
+                      color: isActive && layer.visible
+                          ? Colors.white
+                          : const Color(0xFF4A3F35),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      layer.name,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isActive && layer.visible
+                            ? Colors.white
+                            : const Color(0xFF4A3F35),
                       ),
                     ),
-                  ),
-                  // Name — tap to select layer
-                  GestureDetector(
-                    onTap: () => onLayerSelected(index),
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 2, top: 4, bottom: 4, right: 6),
-                      child: Text(
-                        layer.name,
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: isActive ? Colors.white : const Color(0xFF4A3F35),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           );
@@ -199,10 +194,10 @@ class DrawingToolbar extends StatelessWidget {
   Widget _buildToolRow() {
     return Row(
       children: [
-        // Preset buttons
-        _buildPresetButton('Ink', StrokeOptions.ink),
-        _buildPresetButton('Sketch', StrokeOptions.sketch),
-        _buildPresetButton('Brush', StrokeOptions.watercolor),
+        // Preset buttons — also select the corresponding layer
+        _buildPresetButton('Ink', StrokeOptions.ink, 2),
+        _buildPresetButton('Sketch', StrokeOptions.sketch, 1),
+        _buildPresetButton('Brush', StrokeOptions.watercolor, 0),
         
         const Spacer(),
         
@@ -223,12 +218,15 @@ class DrawingToolbar extends StatelessWidget {
     );
   }
 
-  Widget _buildPresetButton(String label, StrokeOptions options) {
+  Widget _buildPresetButton(String label, StrokeOptions options, int layerIndex) {
     final isSelected = currentOptions == options;
     return Padding(
       padding: const EdgeInsets.only(right: 8),
       child: ElevatedButton(
-        onPressed: () => onOptionsChanged(options),
+        onPressed: () {
+          onLayerSelected(layerIndex);
+          onOptionsChanged(options);
+        },
         style: ElevatedButton.styleFrom(
           backgroundColor: isSelected 
               ? const Color(0xFF8B7355) 
