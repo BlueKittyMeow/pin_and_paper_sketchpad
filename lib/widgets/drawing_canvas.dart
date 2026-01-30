@@ -75,7 +75,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     final stroke = Stroke(
       points: List.from(_currentPoints),
       color: widget.currentColor,
-      baseWidth: widget.strokeOptions.size,
+      options: widget.strokeOptions,
     );
 
     widget.layerStack.addStrokeToActiveLayer(stroke);
@@ -192,7 +192,7 @@ class _DrawingPainter extends CustomPainter {
 
       // Draw all completed strokes in this layer
       for (final stroke in layer.strokes) {
-        _drawStroke(canvas, stroke.points, stroke.color, stroke.baseWidth);
+        _drawStroke(canvas, stroke.points, stroke.color, stroke.options);
       }
 
       canvas.restore();
@@ -200,7 +200,7 @@ class _DrawingPainter extends CustomPainter {
 
     // Draw current stroke in progress (always on top, active layer)
     if (currentPoints.isNotEmpty) {
-      _drawStroke(canvas, currentPoints, currentColor, strokeOptions.size);
+      _drawStroke(canvas, currentPoints, currentColor, strokeOptions);
     }
   }
 
@@ -208,35 +208,43 @@ class _DrawingPainter extends CustomPainter {
     Canvas canvas,
     List<StrokePoint> points,
     Color color,
-    double baseWidth,
+    StrokeOptions options,
   ) {
     if (points.isEmpty) return;
 
     // Convert to perfect_freehand input format
     final pfPoints = points
-        .map((p) => pf.Point(p.x, p.y, p.pressure))
+        .map((p) => pf.PointVector(p.x, p.y, p.pressure))
         .toList();
 
     // Get the outline points from perfect_freehand
     final outlinePoints = pf.getStroke(
       pfPoints,
-      size: strokeOptions.size,
-      thinning: strokeOptions.thinning,
-      smoothing: strokeOptions.smoothing,
-      streamline: strokeOptions.streamline,
-      taperStart: strokeOptions.taperStart,
-      taperEnd: strokeOptions.taperEnd,
-      simulatePressure: strokeOptions.simulatePressure,
+      options: pf.StrokeOptions(
+        size: options.size,
+        thinning: options.thinning,
+        smoothing: options.smoothing,
+        streamline: options.streamline,
+        start: pf.StrokeEndOptions.start(
+          customTaper: options.taperStart > 0 ? options.taperStart : null,
+          taperEnabled: options.taperStart > 0,
+        ),
+        end: pf.StrokeEndOptions.end(
+          customTaper: options.taperEnd > 0 ? options.taperEnd : null,
+          taperEnabled: options.taperEnd > 0,
+        ),
+        simulatePressure: options.simulatePressure,
+      ),
     );
 
     if (outlinePoints.isEmpty) return;
 
     // Build path from outline points
     final path = Path();
-    path.moveTo(outlinePoints.first.x, outlinePoints.first.y);
-    
+    path.moveTo(outlinePoints.first.dx, outlinePoints.first.dy);
+
     for (int i = 1; i < outlinePoints.length; i++) {
-      path.lineTo(outlinePoints[i].x, outlinePoints[i].y);
+      path.lineTo(outlinePoints[i].dx, outlinePoints[i].dy);
     }
     path.close();
 

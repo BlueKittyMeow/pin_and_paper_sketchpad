@@ -112,8 +112,7 @@ class _SketchpadScreenState extends State<SketchpadScreen> {
                 strokeOptions: _currentOptions,
                 debugPressure: _debugPressure,
                 onStrokeComplete: () => setState(() {}),
-                // TODO: Add your scanned card texture here
-                // backgroundImage: const AssetImage('assets/VintagePaper8.png'),
+                backgroundImage: const AssetImage('assets/AP11.jpg'),
               ),
             ),
           ),
@@ -126,6 +125,17 @@ class _SketchpadScreenState extends State<SketchpadScreen> {
             useBlend: _useBlend,
             onColorChanged: (color) => setState(() => _currentColor = color),
             onOptionsChanged: (options) => setState(() => _currentOptions = options),
+            onLayerSelected: (index) {
+              setState(() {
+                _layerStack.setActiveLayer(index);
+                _currentOptions = _layerStack.activeLayer.defaultOptions;
+              });
+            },
+            onVisibilityToggled: (index) {
+              setState(() {
+                _layerStack.toggleLayerVisibility(index);
+              });
+            },
             onBlendChanged: (blend) {
               setState(() {
                 _useBlend = blend;

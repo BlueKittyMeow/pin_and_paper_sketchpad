@@ -8,6 +8,7 @@ class DrawingLayer {
   bool visible;
   double opacity;
   BlendMode blendMode;
+  final StrokeOptions defaultOptions;
   final List<Stroke> strokes;
 
   DrawingLayer({
@@ -16,6 +17,7 @@ class DrawingLayer {
     this.visible = true,
     this.opacity = 1.0,
     this.blendMode = BlendMode.srcOver,
+    this.defaultOptions = StrokeOptions.ink,
     List<Stroke>? strokes,
   }) : strokes = strokes ?? [];
 
@@ -24,6 +26,7 @@ class DrawingLayer {
     id: 'ink_${DateTime.now().millisecondsSinceEpoch}',
     name: 'Ink',
     blendMode: BlendMode.srcOver,
+    defaultOptions: StrokeOptions.ink,
   );
 
   /// Create a sketch layer (middle, can be hidden)
@@ -32,6 +35,7 @@ class DrawingLayer {
     name: 'Sketch',
     opacity: 0.6,
     blendMode: BlendMode.srcOver,
+    defaultOptions: StrokeOptions.sketch,
   );
 
   /// Create a color/watercolor layer (bottom, multiply blend)
@@ -39,6 +43,7 @@ class DrawingLayer {
     id: 'color_${DateTime.now().millisecondsSinceEpoch}',
     name: 'Color',
     blendMode: BlendMode.multiply,
+    defaultOptions: StrokeOptions.watercolor,
   );
 
   void addStroke(Stroke stroke) {

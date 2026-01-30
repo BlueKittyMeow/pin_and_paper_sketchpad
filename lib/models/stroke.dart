@@ -15,23 +15,15 @@ class StrokePoint {
 class Stroke {
   final List<StrokePoint> points;
   final Color color;
-  final double baseWidth;
-  final StrokeStyle style;
+  final StrokeOptions options;
 
   const Stroke({
     required this.points,
     required this.color,
-    required this.baseWidth,
-    this.style = StrokeStyle.ink,
+    required this.options,
   });
 
   bool get isEmpty => points.isEmpty;
-}
-
-enum StrokeStyle {
-  ink,        // Full opacity, tapered
-  sketch,     // Lighter, for rough work
-  watercolor, // Lower opacity, softer edges
 }
 
 /// Parameters for perfect_freehand tuning
@@ -76,11 +68,11 @@ class StrokeOptions {
 
   /// Preset for brush/watercolor feel
   static const watercolor = StrokeOptions(
-    size: 12.0,
-    thinning: 0.7,       // Very pressure sensitive
-    smoothing: 0.6,
+    size: 16.0,
+    thinning: 0.8,       // Very pressure sensitive — light=fine, heavy=broad
+    smoothing: 0.5,
     streamline: 0.5,
-    taperStart: 0.2,
-    taperEnd: 0.3,
+    taperStart: 0.1,     // Quick ramp up
+    taperEnd: 0.2,       // Natural lift-off
   );
 }

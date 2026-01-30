@@ -10,6 +10,8 @@ class DrawingToolbar extends StatelessWidget {
   final ValueChanged<Color> onColorChanged;
   final ValueChanged<StrokeOptions> onOptionsChanged;
   final ValueChanged<bool> onBlendChanged;
+  final ValueChanged<int> onLayerSelected;
+  final ValueChanged<int> onVisibilityToggled;
   final VoidCallback onUndo;
   final VoidCallback onClear;
 
@@ -34,6 +36,8 @@ class DrawingToolbar extends StatelessWidget {
     required this.onColorChanged,
     required this.onOptionsChanged,
     required this.onBlendChanged,
+    required this.onLayerSelected,
+    required this.onVisibilityToggled,
     required this.onUndo,
     required this.onClear,
   });
@@ -84,39 +88,47 @@ class DrawingToolbar extends StatelessWidget {
           
           return Padding(
             padding: const EdgeInsets.only(right: 4),
-            child: GestureDetector(
-              onTap: () => layerStack.setActiveLayer(index),
-              onLongPress: () => layerStack.toggleLayerVisibility(index),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: isActive 
-                      ? const Color(0xFF8B7355) 
-                      : Colors.white,
-                  borderRadius: BorderRadius.circular(4),
-                  border: Border.all(
-                    color: const Color(0xFF8B7355),
-                    width: isActive ? 2 : 1,
-                  ),
+            child: Container(
+              decoration: BoxDecoration(
+                color: isActive
+                    ? const Color(0xFF8B7355)
+                    : Colors.white,
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                  color: const Color(0xFF8B7355),
+                  width: isActive ? 2 : 1,
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      layer.visible ? Icons.visibility : Icons.visibility_off,
-                      size: 14,
-                      color: isActive ? Colors.white : const Color(0xFF4A3F35),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      layer.name,
-                      style: TextStyle(
-                        fontSize: 11,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Eye icon — tap to toggle visibility
+                  GestureDetector(
+                    onTap: () => onVisibilityToggled(index),
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 6, top: 4, bottom: 4, right: 2),
+                      child: Icon(
+                        layer.visible ? Icons.visibility : Icons.visibility_off,
+                        size: 14,
                         color: isActive ? Colors.white : const Color(0xFF4A3F35),
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                  // Name — tap to select layer
+                  GestureDetector(
+                    onTap: () => onLayerSelected(index),
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 2, top: 4, bottom: 4, right: 6),
+                      child: Text(
+                        layer.name,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: isActive ? Colors.white : const Color(0xFF4A3F35),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           );
