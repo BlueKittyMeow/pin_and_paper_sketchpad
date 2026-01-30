@@ -50,8 +50,8 @@ class StrokeOptions {
   static const ink = StrokeOptions(
     size: 3.0,
     thinning: 0.6,       // Noticeable pressure variation
-    smoothing: 0.3,      // Low - preserve stroke energy
-    streamline: 0.4,
+    smoothing: 0.5,      // Moderate - clean lines without wobble
+    streamline: 0.5,
     taperStart: 0.1,
     taperEnd: 0.2,
   );

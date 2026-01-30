@@ -34,7 +34,7 @@ A three-layer drawing system designed for the sketch-ink-color workflow common i
 | Size                       | 2.0         | 3.0         | 16.0                 |
 | Thinning (pressure→width)  | 0.4         | 0.6         | 0.8 (very sensitive) |
 | Smoothing                  | 0.2 (loose) | 0.5 (clean) | 0.5                  |
-| Streamline                 | 0.3         | 0.4         | 0.5                  |
+| Streamline                 | 0.3         | 0.5         | 0.5                  |
 | Taper start                | 0.0         | 0.1         | 0.1 (quick ramp up)  |
 | Taper end                  | 0.1         | 0.2         | 0.2 (natural lift)   |
 
@@ -97,11 +97,95 @@ Layer composite:
 - Clear (per-layer)
 - Eraser toggle with options (edge type, size, pressure mode)
 
-## Future Considerations
+---
 
-- Opacity slider per layer
-- Additional layers (user-created)
-- Layer merge/flatten
-- Layer settings menu (blend mode, opacity) via long-press
-- Export flattened PNG
-- Eraser opacity/flow control
+# Project Vision & Roadmap
+
+## Vision
+
+Pin & Paper is a visual task app built around notecards and bullet journaling. Drawing and task management are **equal-weight pillars** — the sketchpad is not an afterthought bolted onto a to-do list, and the task system is not a sidebar to a drawing app. They are designed together.
+
+The sketchpad module lives as a self-contained component that can be **embedded within any notecard**. A card can contain one or multiple drawings, each pinned at its own XY position. Drawings can also exist as **freestanding doodles on the background**, independent of any card — just ink on the workspace.
+
+## Drawing Placement Model
+
+- Each drawing instance has an **XY position** — it stays where it's placed
+- A card can link to **one or multiple drawings**, each at its own position on the card
+- Drawings can exist **independently of cards** as background doodles on the workspace
+- **Group/ungroup** (stretch goal) — select multiple drawings and manipulate them as a single unit, à la Zinnia
+- The parent app owns placement and linking; the sketchpad module exposes position/bounds and supports being embedded at arbitrary coordinates
+
+## Module Architecture
+
+The sketchpad is designed as a **self-contained Flutter package** with a clean boundary between itself and the host app.
+
+### What the host app provides
+- Card/container dimensions
+- Save/load callbacks (persistence is the host's responsibility)
+- Asset references (background images, paper textures)
+- Position and transform (where the drawing sits in the workspace)
+
+### What the module exposes
+- `SketchpadWidget` — the drawing surface, embeddable anywhere
+- Serialization — full drawing state to/from structured data
+- State management — internal, no coupling to host state
+- Bounds — the module knows its own size, the host handles placement
+
+### Principles
+- No dependency on parent app state management (Provider, Bloc, etc.)
+- Serializable state: any drawing can be saved, restored, duplicated
+- Position-aware but not position-owning: the module reports its bounds, the parent decides where it goes
+
+## Near-Term Roadmap
+
+### M1: Eraser System
+Per the eraser spec above. Implementation order:
+1. Hard-edge constant-size eraser
+2. Size slider
+3. Pressure-sensitivity toggle (constant vs tapered)
+4. Soft edge (gradient brush tip)
+5. Cursor preview, S-Pen button detection
+
+### M2: Color Selection
+- **Color spectrum picker** — an additional circle/wheel selector beyond the fixed palette swatches
+- **Custom palettes** — user-created palettes saved per-project or globally, swappable in the toolbar
+
+### M3: Tool Controls (size slider, pressure toggle, soft edge)
+- **Size slider** for all brush presets (adjust size at runtime, not just presets)
+- **Pressure sensitivity toggle** (on/off per tool — useful for mouse/trackpad users)
+- **Soft edge gradient brush tip** (not just for eraser — applies to Color layer brush too)
+
+### M4: Canvas Manipulation
+- **Move** the drawing/image around the canvas
+- **Resize** (pinch-to-zoom or handles)
+- **Rotate** (two-finger rotation or rotation handle)
+- These apply to the background reference image and potentially to individual layer content
+
+### M5: Cursor Preview
+- Show brush/eraser **size and shape** on S-Pen hover (before touching the surface)
+- Preview updates in real-time as pen approaches at different pressures
+- Visual indicator for current tool mode (draw vs erase)
+
+### M6: Serialization
+- Save/load full drawing state (all layers, strokes, options, eraser masks)
+- Format: structured JSON or binary — needs to be compact enough for many drawings per workspace
+- Enables undo history persistence, card duplication, template drawings
+
+### M7: Module Extraction
+- Extract sketchpad into a clean Flutter package
+- Define the embed API for notecard integration
+- Ensure no hard dependencies on the prototype app's structure
+
+### M8: Export
+- Flatten all visible layers to a single PNG
+- Supports sharing, embedding as card thumbnail, printing
+
+## Long-Term Vision
+
+- **Custom brushes / stamp tools** — user-defined brush tips, pattern stamps
+- **Animation / onion skinning** — flip-book style frame-by-frame on cards
+- **Collaboration / sync** — real-time or async shared drawing surfaces
+- **Asset library** — stickers, reference images, templates, reusable drawing components
+- **Layer enhancements** — opacity slider per layer, user-created layers, layer merge/flatten, layer settings via long-press menu
+- **Eraser opacity/flow** — control how quickly alpha builds up per eraser pass
+- **Group/ungroup drawings** — select multiple drawings, move/scale/rotate as one unit
