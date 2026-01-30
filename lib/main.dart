@@ -39,6 +39,7 @@ class _SketchpadScreenState extends State<SketchpadScreen> {
   late LayerStack _layerStack;
   Color _currentColor = const Color(0xFF2D2D2D); // Near black
   StrokeOptions _currentOptions = StrokeOptions.ink;
+  bool _eraserActive = false;
   // _useBlend is now derived from active layer's blend mode
   bool _debugPressure = true; // Start with debug on for testing
 
@@ -110,6 +111,7 @@ class _SketchpadScreenState extends State<SketchpadScreen> {
                 layerStack: _layerStack,
                 currentColor: _currentColor,
                 strokeOptions: _currentOptions,
+                isEraserActive: _eraserActive,
                 debugPressure: _debugPressure,
                 onStrokeComplete: () => setState(() {}),
                 backgroundImage: const AssetImage('assets/AP11.jpg'),
@@ -124,11 +126,17 @@ class _SketchpadScreenState extends State<SketchpadScreen> {
             currentOptions: _currentOptions,
             useBlend: _layerStack.activeLayer.blendMode == BlendMode.multiply,
             onColorChanged: (color) => setState(() => _currentColor = color),
-            onOptionsChanged: (options) => setState(() => _currentOptions = options),
+            onOptionsChanged: (options) => setState(() {
+              _currentOptions = options;
+              _eraserActive = false;
+            }),
+            isEraserActive: _eraserActive,
+            onEraserToggled: (active) => setState(() => _eraserActive = active),
             onLayerSelected: (index) {
               setState(() {
                 _layerStack.setActiveLayer(index);
                 _currentOptions = _layerStack.activeLayer.defaultOptions;
+                _eraserActive = false;
               });
             },
             onVisibilityToggled: (index) {

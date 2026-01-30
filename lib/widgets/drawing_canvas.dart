@@ -8,6 +8,7 @@ class DrawingCanvas extends StatefulWidget {
   final LayerStack layerStack;
   final Color currentColor;
   final StrokeOptions strokeOptions;
+  final bool isEraserActive;
   final VoidCallback? onStrokeComplete;
   final ImageProvider? backgroundImage;
   final bool debugPressure; // Show pressure values for testing
@@ -17,6 +18,7 @@ class DrawingCanvas extends StatefulWidget {
     required this.layerStack,
     required this.currentColor,
     required this.strokeOptions,
+    this.isEraserActive = false,
     this.onStrokeComplete,
     this.backgroundImage,
     this.debugPressure = false,
@@ -76,6 +78,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
       points: List.from(_currentPoints),
       color: widget.currentColor,
       options: widget.strokeOptions,
+      isEraser: widget.isEraserActive,
     );
 
     widget.layerStack.addStrokeToActiveLayer(stroke);
@@ -129,6 +132,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                 currentPoints: _currentPoints,
                 currentColor: widget.currentColor,
                 strokeOptions: widget.strokeOptions,
+                isEraserActive: widget.isEraserActive,
               ),
               isComplex: true,
               willChange: true,
@@ -170,46 +174,77 @@ class _DrawingPainter extends CustomPainter {
   final List<StrokePoint> currentPoints;
   final Color currentColor;
   final StrokeOptions strokeOptions;
+  final bool isEraserActive;
 
   _DrawingPainter({
     required this.layerStack,
     required this.currentPoints,
     required this.currentColor,
     required this.strokeOptions,
+    this.isEraserActive = false,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
+    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
+
     // Render each visible layer
     for (final layer in layerStack.visibleLayers) {
       // Save canvas state for layer opacity/blend
       canvas.saveLayer(
-        Rect.fromLTWH(0, 0, size.width, size.height),
+        rect,
         Paint()
           ..color = Colors.white.withOpacity(layer.opacity)
           ..blendMode = layer.blendMode,
       );
 
-      // Draw all completed strokes in this layer
+      // Draw strokes interleaved — eraser strokes use dstOut to cut holes
       for (final stroke in layer.strokes) {
-        _drawStroke(canvas, stroke.points, stroke.color, stroke.options);
+        if (stroke.isEraser) {
+          _drawStroke(canvas, stroke.points, stroke.options,
+              paint: Paint()
+                ..blendMode = BlendMode.dstOut
+                ..color = Colors.white
+                ..style = PaintingStyle.fill
+                ..isAntiAlias = true);
+        } else {
+          _drawStroke(canvas, stroke.points, stroke.options,
+              paint: Paint()
+                ..color = stroke.color
+                ..style = PaintingStyle.fill
+                ..isAntiAlias = true);
+        }
+      }
+
+      // Draw current stroke in-progress inside its own layer
+      final isActiveLayer = layer == layerStack.activeLayer;
+      if (isActiveLayer && currentPoints.isNotEmpty) {
+        if (isEraserActive) {
+          _drawStroke(canvas, currentPoints, strokeOptions,
+              paint: Paint()
+                ..blendMode = BlendMode.dstOut
+                ..color = Colors.white
+                ..style = PaintingStyle.fill
+                ..isAntiAlias = true);
+        } else {
+          _drawStroke(canvas, currentPoints, strokeOptions,
+              paint: Paint()
+                ..color = currentColor
+                ..style = PaintingStyle.fill
+                ..isAntiAlias = true);
+        }
       }
 
       canvas.restore();
-    }
-
-    // Draw current stroke in progress (always on top, active layer)
-    if (currentPoints.isNotEmpty) {
-      _drawStroke(canvas, currentPoints, currentColor, strokeOptions);
     }
   }
 
   void _drawStroke(
     Canvas canvas,
     List<StrokePoint> points,
-    Color color,
-    StrokeOptions options,
-  ) {
+    StrokeOptions options, {
+    required Paint paint,
+  }) {
     if (points.isEmpty) return;
 
     // Convert to perfect_freehand input format
@@ -248,14 +283,7 @@ class _DrawingPainter extends CustomPainter {
     }
     path.close();
 
-    // Draw filled path
-    canvas.drawPath(
-      path,
-      Paint()
-        ..color = color
-        ..style = PaintingStyle.fill
-        ..isAntiAlias = true,
-    );
+    canvas.drawPath(path, paint);
   }
 
   @override

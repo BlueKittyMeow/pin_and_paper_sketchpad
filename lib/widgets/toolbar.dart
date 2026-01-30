@@ -12,6 +12,8 @@ class DrawingToolbar extends StatelessWidget {
   final ValueChanged<bool> onBlendChanged;
   final ValueChanged<int> onLayerSelected;
   final ValueChanged<int> onVisibilityToggled;
+  final bool isEraserActive;
+  final ValueChanged<bool> onEraserToggled;
   final VoidCallback onUndo;
   final VoidCallback onClear;
 
@@ -38,6 +40,8 @@ class DrawingToolbar extends StatelessWidget {
     required this.onBlendChanged,
     required this.onLayerSelected,
     required this.onVisibilityToggled,
+    this.isEraserActive = false,
+    required this.onEraserToggled,
     required this.onUndo,
     required this.onClear,
   });
@@ -199,9 +203,12 @@ class DrawingToolbar extends StatelessWidget {
         _buildPresetButton('Sketch', StrokeOptions.sketch, 1),
         _buildPresetButton('Ink', StrokeOptions.ink, 2),
         _buildPresetButton('Color', StrokeOptions.watercolor, 0),
-        
+        const SizedBox(width: 8),
+        // Eraser toggle
+        _buildEraserButton(),
+
         const Spacer(),
-        
+
         // Actions
         IconButton(
           onPressed: onUndo,
@@ -219,8 +226,33 @@ class DrawingToolbar extends StatelessWidget {
     );
   }
 
+  Widget _buildEraserButton() {
+    return ElevatedButton(
+      onPressed: () => onEraserToggled(!isEraserActive),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: isEraserActive
+            ? const Color(0xFFC75B4A)
+            : Colors.white,
+        foregroundColor: isEraserActive
+            ? Colors.white
+            : const Color(0xFF4A3F35),
+        elevation: isEraserActive ? 2 : 0,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        minimumSize: Size.zero,
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.auto_fix_high, size: 14),
+          SizedBox(width: 4),
+          Text('Eraser', style: TextStyle(fontSize: 12)),
+        ],
+      ),
+    );
+  }
+
   Widget _buildPresetButton(String label, StrokeOptions options, int layerIndex) {
-    final isSelected = currentOptions == options;
+    final isSelected = !isEraserActive && currentOptions == options;
     return Padding(
       padding: const EdgeInsets.only(right: 8),
       child: ElevatedButton(

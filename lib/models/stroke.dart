@@ -16,11 +16,13 @@ class Stroke {
   final List<StrokePoint> points;
   final Color color;
   final StrokeOptions options;
+  final bool isEraser;
 
   const Stroke({
     required this.points,
     required this.color,
     required this.options,
+    this.isEraser = false,
   });
 
   bool get isEmpty => points.isEmpty;
