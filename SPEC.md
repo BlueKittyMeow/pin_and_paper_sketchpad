@@ -189,3 +189,365 @@ Per the eraser spec above. Implementation order:
 - **Layer enhancements** — opacity slider per layer, user-created layers, layer merge/flatten, layer settings via long-press menu
 - **Eraser opacity/flow** — control how quickly alpha builds up per eraser pass
 - **Group/ungroup drawings** — select multiple drawings, move/scale/rotate as one unit
+
+---
+
+# Shape Correction System Spec
+
+## Overview
+
+A Procreate-style QuickShape system that detects when users are drawing geometric shapes and offers to snap them to perfect geometry, with an interactive adjustment phase before committing.
+
+**Priority:** Phase 5+
+**Complexity:** Medium-High
+**Dependencies:** Core drawing system complete, multi-touch support
+
+---
+
+## Core UX Flow
+
+```
+DRAW → HOLD → SNAP → ADJUST → LIFT (confirm)
+                 ↓
+              UNDO → raw stroke preserved
+```
+
+The key insight: snapping is not the end state. After snap, the user enters an **interactive adjustment mode** where they can refine the shape before lifting to confirm. Undo always returns the original hand-drawn stroke, not the snapped version.
+
+---
+
+## Shape Behaviors
+
+### Line
+
+| Phase | Behavior |
+|-------|----------|
+| Draw | User draws a stroke |
+| Hold | Pause at endpoint ~500ms without lifting |
+| Snap | Stroke becomes a straight line from start → end point |
+| Adjust | **Start point anchored.** Without lifting, user drags to move endpoint freely — any angle, any length. Like the end of a string pinned at one end. |
+| Confirm | Lift pen to commit |
+| Undo | Reverts to original raw stroke |
+
+**Optional modifier:** Second finger tap snaps line to angle increments (0°, 15°, 30°, 45°, 90°, etc.)
+
+---
+
+### Arc
+
+| Phase | Behavior |
+|-------|----------|
+| Draw | User draws a curved stroke |
+| Hold | Pause at endpoint ~500ms |
+| Snap | Stroke becomes a smooth arc (fitted to curve) |
+| Adjust | Start point anchored. User drags endpoint; arc curvature/radius adjusts proportionally. |
+| Confirm | Lift to commit |
+| Undo | Reverts to original raw stroke |
+
+**Optional modifier:** Second finger tap snaps to semicircle or quarter-circle
+
+---
+
+### Circle / Ellipse
+
+| Phase | Behavior |
+|-------|----------|
+| Draw | User draws a roughly closed shape (endpoint near start point) |
+| Hold | Pause near starting point ~500ms |
+| Snap | Stroke becomes an ellipse fitted to the rough shape |
+| Adjust | Without lifting, drag to **scale uniformly from center** — shape grows or shrinks |
+| Modifier | **Tap with second finger → constrains to perfect circle** (maintains 1:1 aspect ratio) |
+| Confirm | Lift to commit |
+| Undo | Reverts to original raw stroke |
+
+---
+
+### Rectangle (Future)
+
+| Phase | Behavior |
+|-------|----------|
+| Draw | User draws a roughly closed shape with 4 detected corners |
+| Hold | Pause near starting point ~500ms |
+| Snap | Stroke becomes a rectangle fitted to corners |
+| Adjust | Drag to scale from center |
+| Modifier | **Tap with second finger → constrains to perfect square** |
+| Confirm | Lift to commit |
+| Undo | Reverts to original raw stroke |
+
+---
+
+## Detection Heuristics
+
+### Hold Detection
+- Movement velocity drops below threshold
+- Position stays within small radius (~5px) for ~500ms
+- Timer cancels if user moves or lifts
+
+### Shape Recognition
+
+| Shape | Detection Criteria |
+|-------|---------------------|
+| Line | All points have low perpendicular variance from start→end vector |
+| Arc | Points fit a circular arc segment (open stroke, curved) |
+| Ellipse | Stroke is closed (end within ~30px of start) + points roughly equidistant from centroid |
+| Circle | Ellipse where fitted radii are nearly equal (auto-detected, or forced via modifier) |
+| Rectangle | Closed stroke + 4 corners detected (sharp direction changes ~90°) |
+
+### Corner Detection (for rectangles)
+- Identify points where stroke direction changes sharply (>60° over short distance)
+- Cluster nearby corners
+- Validate roughly perpendicular angles
+
+---
+
+## Shape Fitting Algorithms
+
+### Line
+```
+start = first point
+end = last point (or current drag position in adjust mode)
+```
+
+### Circle / Ellipse
+Least-squares fitting:
+1. Compute centroid of all points
+2. For circle: average distance from centroid = radius
+3. For ellipse: fit major/minor axes using covariance matrix
+
+### Arc
+1. Fit a circle to the points
+2. Arc is the segment of that circle from start to end angle
+
+### Rectangle
+1. Detect 4 corners
+2. Compute bounding quadrilateral
+3. Optionally rotate to align with dominant edge angle
+
+---
+
+## Adjustment Mode Mechanics
+
+### Anchored Endpoint (Lines/Arcs)
+```
+anchor = stroke start point (fixed)
+drag_point = current pen position
+shape = recompute line/arc from anchor → drag_point
+```
+
+### Center Scaling (Circles/Ellipses/Rectangles)
+```
+center = shape center (fixed)
+original_radius = fitted radius at snap time
+current_distance = distance from center to current pen position
+scale_factor = current_distance / original_radius
+new_shape = original_shape scaled by scale_factor around center
+```
+
+### Constraint Modifier (Second Finger Tap)
+- Ellipse → Circle: set both radii to average of major/minor
+- Rectangle → Square: set both dimensions to average
+
+---
+
+## State Machine
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                                                                 │
+│  IDLE ──(pen down)──► DRAWING ──(hold detected)──► SNAPPED     │
+│                          │                            │         │
+│                          │                            ▼         │
+│                     (pen lift)                    ADJUSTING     │
+│                          │                         │     │      │
+│                          ▼                         │     │      │
+│                     RAW STROKE ◄──(undo)───────────┘     │      │
+│                                                          │      │
+│                     CONFIRMED ◄────(pen lift)────────────┘      │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Data Model
+
+```dart
+enum ShapeType { line, arc, circle, ellipse, rectangle }
+
+class RecognizedShape {
+  final ShapeType type;
+  final List<StrokePoint> rawPoints;     // Original hand-drawn points
+  final ShapeGeometry geometry;           // Computed perfect geometry
+  final Offset anchor;                    // Fixed point during adjustment
+  final bool isConstrained;               // e.g., circle vs ellipse
+
+  RecognizedShape adjusted(Offset newDragPoint);
+  RecognizedShape constrain();            // Apply modifier (circle/square)
+}
+
+abstract class ShapeGeometry {
+  Path toPath();
+}
+
+class LineGeometry extends ShapeGeometry {
+  final Offset start;
+  final Offset end;
+}
+
+class CircleGeometry extends ShapeGeometry {
+  final Offset center;
+  final double radius;
+}
+
+class EllipseGeometry extends ShapeGeometry {
+  final Offset center;
+  final double radiusX;
+  final double radiusY;
+  final double rotation;
+}
+
+class ArcGeometry extends ShapeGeometry {
+  final Offset center;
+  final double radius;
+  final double startAngle;
+  final double sweepAngle;
+}
+```
+
+---
+
+## Multi-Touch Handling
+
+The modifier gesture (second finger tap) requires detecting:
+- S-Pen is down and in ADJUSTING state
+- A finger touches screen briefly (tap, not drag)
+- Trigger constraint toggle
+
+**Android consideration:** Verify S-Pen + finger simultaneous input is reported correctly. Most Samsung devices support this, but needs testing.
+
+```dart
+// Pseudocode
+void onPointerDown(PointerEvent event) {
+  if (state == ShapeState.adjusting && event.kind == PointerDeviceKind.touch) {
+    // Finger tap while pen is adjusting
+    toggleConstraint();
+    event.consume(); // Don't treat as drawing input
+  }
+}
+```
+
+---
+
+## Undo Behavior
+
+Shape correction creates a special undo state:
+
+```dart
+class ShapeStroke extends Stroke {
+  final List<StrokePoint> rawPoints;      // What user actually drew
+  final ShapeGeometry snappedGeometry;    // The perfect shape
+
+  // Undo replaces this stroke with a regular Stroke using rawPoints
+}
+```
+
+When user undoes a shape-corrected stroke:
+1. Remove the snapped shape
+2. Replace with raw hand-drawn stroke
+3. (Second undo removes the raw stroke entirely)
+
+---
+
+## Visual Feedback
+
+### During Hold Detection
+- Subtle pulsing or highlight at pen position
+- Optional: progress indicator (circular wipe around cursor)
+
+### On Snap
+- Brief animation morphing raw stroke → geometry (~150ms)
+- Haptic feedback (short pulse)
+- Visual indicator that adjustment mode is active
+
+### During Adjustment
+- Shape renders in real-time following drag
+- Anchor point could show a subtle pin/dot
+- If constrained (circle/square), show indicator
+
+### On Confirm
+- Shape finalizes
+- Standard stroke appearance
+
+---
+
+## Configuration Options
+
+```dart
+class ShapeRecognitionSettings {
+  bool enabled = true;                    // Master toggle
+  Duration holdDuration = Duration(milliseconds: 500);
+  double closedShapeThreshold = 30.0;     // Max distance end→start for "closed"
+  double lineVarianceThreshold = 10.0;    // Max deviation for line detection
+  bool hapticFeedback = true;
+  bool snapToAngles = true;               // Line angle snapping
+  double angleSnapIncrement = 15.0;       // Degrees
+}
+```
+
+---
+
+## Implementation Phases
+
+### Phase 1: Lines Only
+- Hold detection
+- Line snapping
+- Anchored endpoint adjustment
+- Basic undo support
+
+### Phase 2: Circles/Ellipses
+- Closed shape detection
+- Circle/ellipse fitting
+- Center-based scaling adjustment
+- Second finger constraint modifier
+
+### Phase 3: Arcs
+- Arc detection and fitting
+- Endpoint adjustment preserving curvature
+
+### Phase 4: Rectangles (Optional)
+- Corner detection
+- Rectangle fitting
+- Square constraint
+
+### Phase 5: Polish
+- Animations
+- Haptic feedback
+- Angle snapping for lines
+- Settings/preferences
+
+---
+
+## Testing Checklist
+
+- [ ] Hold detection triggers at correct timing
+- [ ] Line snap looks correct
+- [ ] Line adjustment pivots around anchor
+- [ ] Circle/ellipse detection works for rough shapes
+- [ ] Scaling from center feels natural
+- [ ] Second finger tap toggles circle ↔ ellipse
+- [ ] Undo restores raw stroke, not snapped
+- [ ] Multi-touch works correctly (S-Pen + finger)
+- [ ] Performance acceptable (no lag during adjustment)
+- [ ] Works on all target layers
+
+---
+
+## References
+
+- Procreate QuickShape behavior (primary reference)
+- Concepts app shape detection
+- Apple PencilKit shape recognition (for comparison)
+
+---
+
+*This feature makes the app significantly more powerful for diagrams, clean boxes around tasks, geometric doodles, and UI sketching. It's a "delight" feature that rewards users who discover it.*
