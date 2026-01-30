@@ -39,7 +39,7 @@ class _SketchpadScreenState extends State<SketchpadScreen> {
   late LayerStack _layerStack;
   Color _currentColor = const Color(0xFF2D2D2D); // Near black
   StrokeOptions _currentOptions = StrokeOptions.ink;
-  bool _useBlend = true;
+  // _useBlend is now derived from active layer's blend mode
   bool _debugPressure = true; // Start with debug on for testing
 
   @override
@@ -122,7 +122,7 @@ class _SketchpadScreenState extends State<SketchpadScreen> {
             layerStack: _layerStack,
             currentColor: _currentColor,
             currentOptions: _currentOptions,
-            useBlend: _useBlend,
+            useBlend: _layerStack.activeLayer.blendMode == BlendMode.multiply,
             onColorChanged: (color) => setState(() => _currentColor = color),
             onOptionsChanged: (options) => setState(() => _currentOptions = options),
             onLayerSelected: (index) {
@@ -138,9 +138,7 @@ class _SketchpadScreenState extends State<SketchpadScreen> {
             },
             onBlendChanged: (blend) {
               setState(() {
-                _useBlend = blend;
-                // Update active layer's blend mode
-                _layerStack.activeLayer.blendMode = 
+                _layerStack.activeLayer.blendMode =
                     blend ? BlendMode.multiply : BlendMode.srcOver;
               });
             },

@@ -82,7 +82,8 @@ class DrawingToolbar extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 8),
-        ...List.generate(layerStack.layers.length, (index) {
+        // Display order: Sketch(1), Ink(2), Brush/Color(0)
+        ...[1, 2, 0].map((index) {
           final layer = layerStack.layers[index];
           final isActive = index == layerStack.activeLayerIndex;
           
@@ -195,9 +196,9 @@ class DrawingToolbar extends StatelessWidget {
     return Row(
       children: [
         // Preset buttons — also select the corresponding layer
-        _buildPresetButton('Ink', StrokeOptions.ink, 2),
         _buildPresetButton('Sketch', StrokeOptions.sketch, 1),
-        _buildPresetButton('Brush', StrokeOptions.watercolor, 0),
+        _buildPresetButton('Ink', StrokeOptions.ink, 2),
+        _buildPresetButton('Color', StrokeOptions.watercolor, 0),
         
         const Spacer(),
         
