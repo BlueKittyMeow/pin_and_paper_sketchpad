@@ -2,6 +2,8 @@
 
 Pressure-sensitive drawing module for the Pin & Paper app. Three-layer system (sketch → ink → color) with per-layer eraser, blend modes, and S-Pen support.
 
+> 📋 Specs and cross-module plans live in the dev harness. Active plan (drag-and-drop canvas MVP → POC): [`pin_and_paper_dev_harness/docs/working/DRAG_DROP_CANVAS_MVP_PLAN.md`](https://github.com/BlueKittyMeow/pin_and_paper_dev_harness/blob/main/docs/working/DRAG_DROP_CANVAS_MVP_PLAN.md)
+
 ## Quick Start
 
 ```bash
