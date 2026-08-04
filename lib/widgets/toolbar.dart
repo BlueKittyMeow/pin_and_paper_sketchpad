@@ -144,7 +144,7 @@ class DrawingToolbar extends StatelessWidget {
             Switch(
               value: useBlend,
               onChanged: onBlendChanged,
-              activeColor: const Color(0xFF8B7355),
+              activeThumbColor: const Color(0xFF8B7355),
             ),
           ],
         ),
@@ -165,7 +165,7 @@ class DrawingToolbar extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         ..._colors.map((color) {
-          final isSelected = color.value == currentColor.value;
+          final isSelected = color.toARGB32() == currentColor.toARGB32();
           return GestureDetector(
             onTap: () => onColorChanged(color),
             child: Container(
@@ -182,7 +182,7 @@ class DrawingToolbar extends StatelessWidget {
                 boxShadow: isSelected
                     ? [
                         BoxShadow(
-                          color: color.withOpacity(0.5),
+                          color: color.withValues(alpha: 0.5),
                           blurRadius: 4,
                           spreadRadius: 1,
                         )

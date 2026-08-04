@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:perfect_freehand/perfect_freehand.dart' as pf;
 import '../models/stroke.dart';
@@ -32,10 +33,34 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   List<StrokePoint> _currentPoints = [];
   double _lastPressure = 0.0;
 
+  /// The pointer currently drawing the in-progress stroke. Events from any
+  /// other pointer (second finger, resting palm) are ignored so they cannot
+  /// interleave points into the active stroke.
+  int? _activePointer;
+  PointerDeviceKind? _activePointerKind;
+
+  static bool _isStylus(PointerDeviceKind? kind) =>
+      kind == PointerDeviceKind.stylus ||
+      kind == PointerDeviceKind.invertedStylus;
+
   void _onPointerDown(PointerDownEvent event) {
-    final pressure = _normalizePressure(event.pressure);
+    if (_activePointer != null) {
+      // Palm rejection: a stylus touching down cancels an in-progress
+      // touch stroke (the "stroke" was almost certainly a resting palm).
+      if (_isStylus(event.kind) && !_isStylus(_activePointerKind)) {
+        _discardCurrentStroke();
+      } else {
+        // A second finger (or a palm while the stylus draws): ignore it.
+        return;
+      }
+    }
+
+    _activePointer = event.pointer;
+    _activePointerKind = event.kind;
+
+    final pressure = _normalizePressure(event);
     _lastPressure = pressure;
-    
+
     setState(() {
       _currentPoints = [
         StrokePoint(
@@ -53,7 +78,9 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   }
 
   void _onPointerMove(PointerMoveEvent event) {
-    final pressure = _normalizePressure(event.pressure);
+    if (event.pointer != _activePointer) return;
+
+    final pressure = _normalizePressure(event);
     _lastPressure = pressure;
 
     setState(() {
@@ -72,6 +99,11 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   }
 
   void _onPointerUp(PointerUpEvent event) {
+    if (event.pointer != _activePointer) return;
+
+    _activePointer = null;
+    _activePointerKind = null;
+
     if (_currentPoints.isEmpty) return;
 
     final stroke = Stroke(
@@ -82,7 +114,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     );
 
     widget.layerStack.addStrokeToActiveLayer(stroke);
-    
+
     setState(() {
       _currentPoints = [];
     });
@@ -94,25 +126,45 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     }
   }
 
-  /// Normalize pressure value - handles devices that don't report pressure
-  double _normalizePressure(double pressure) {
-    // pressure == 0 often means "not supported" or "not pressed"
-    // pressure == 1 is sometimes the default for non-pressure devices
-    // S-Pen should report actual 0.0-1.0 values
-    
-    if (pressure == 0.0 || pressure == 1.0) {
-      // Likely no pressure support, use default
-      return 0.5;
+  void _onPointerCancel(PointerCancelEvent event) {
+    if (event.pointer != _activePointer) return;
+    // System cancelled the pointer (palm gesture, notification shade, app
+    // switch): discard the in-progress stroke deliberately.
+    _discardCurrentStroke();
+  }
+
+  void _discardCurrentStroke() {
+    _activePointer = null;
+    _activePointerKind = null;
+    setState(() {
+      _currentPoints = [];
+    });
+  }
+
+  /// Normalize pressure per-device.
+  ///
+  /// A real stylus reports meaningful pressure — trust it (including an
+  /// honest 1.0 at max press; the old heuristic snapped that to 0.5).
+  /// Touch/mouse pressure readings are unreliable, so use a neutral 0.5.
+  double _normalizePressure(PointerEvent event) {
+    if (_isStylus(event.kind)) {
+      final range = event.pressureMax - event.pressureMin;
+      if (range > 0) {
+        return ((event.pressure - event.pressureMin) / range).clamp(0.0, 1.0);
+      }
+      return event.pressure.clamp(0.0, 1.0);
     }
-    return pressure.clamp(0.0, 1.0);
+    return 0.5;
   }
 
   @override
   Widget build(BuildContext context) {
     return Listener(
+      behavior: HitTestBehavior.opaque,
       onPointerDown: _onPointerDown,
       onPointerMove: _onPointerMove,
       onPointerUp: _onPointerUp,
+      onPointerCancel: _onPointerCancel,
       child: Stack(
         children: [
           // Background image (card texture)
@@ -194,7 +246,7 @@ class _DrawingPainter extends CustomPainter {
       canvas.saveLayer(
         rect,
         Paint()
-          ..color = Colors.white.withOpacity(layer.opacity)
+          ..color = Colors.white.withValues(alpha: layer.opacity)
           ..blendMode = layer.blendMode,
       );
 

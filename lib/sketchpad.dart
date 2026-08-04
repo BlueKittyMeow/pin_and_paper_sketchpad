@@ -27,8 +27,19 @@
 /// - **Sketch**: Loose strokes, 60% opacity, for rough work  
 /// - **Ink**: Clean strokes, for final linework
 /// 
+/// ## Serialization
+///
+/// `LayerStack.toJson()` / `LayerStack.fromJson()` implement drawing
+/// format v1: `{"v": 1, "size": [w, h], "layers": [...]}` with points
+/// stored as `[x, y, pressure]` triples. Set `LayerStack.size` (the
+/// capture-space size) before serializing.
+///
+/// ## Demo app
+///
+/// A runnable prototype app lives in `example/`.
+///
 /// ## Specs
-/// 
+///
 /// See `pin_and_paper_dev_harness/docs/module_specs/SKETCHPAD_SPEC.md`
 /// for full documentation.
 library sketchpad;
