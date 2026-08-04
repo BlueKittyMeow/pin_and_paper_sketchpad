@@ -48,7 +48,13 @@ class _SketchpadScreenState extends State<SketchpadScreen> {
 
   void _handleUndo() {
     setState(() {
-      _layerStack.undoOnActiveLayer();
+      _layerStack.undo();
+    });
+  }
+
+  void _handleRedo() {
+    setState(() {
+      _layerStack.redo();
     });
   }
 
@@ -151,6 +157,9 @@ class _SketchpadScreenState extends State<SketchpadScreen> {
               });
             },
             onUndo: _handleUndo,
+            canUndo: _layerStack.canUndo,
+            onRedo: _handleRedo,
+            canRedo: _layerStack.canRedo,
             onClear: _handleClear,
           ),
         ],

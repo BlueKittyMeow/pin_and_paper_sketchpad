@@ -14,7 +14,17 @@ class DrawingToolbar extends StatelessWidget {
   final ValueChanged<int> onVisibilityToggled;
   final bool isEraserActive;
   final ValueChanged<bool> onEraserToggled;
+
+  /// Cross-layer chronological undo (see [LayerStack.undo]); the button
+  /// is disabled while [canUndo] is false.
   final VoidCallback onUndo;
+  final bool canUndo;
+
+  /// Cross-layer redo (see [LayerStack.redo]); the button only appears
+  /// when a callback is wired, and disables while [canRedo] is false.
+  final VoidCallback? onRedo;
+  final bool canRedo;
+
   final VoidCallback onClear;
 
   // Pin and Paper color palette
@@ -43,6 +53,9 @@ class DrawingToolbar extends StatelessWidget {
     this.isEraserActive = false,
     required this.onEraserToggled,
     required this.onUndo,
+    this.canUndo = true,
+    this.onRedo,
+    this.canRedo = false,
     required this.onClear,
   });
 
@@ -209,13 +222,21 @@ class DrawingToolbar extends StatelessWidget {
 
         const Spacer(),
 
-        // Actions
+        // Actions — undo/redo step through the cross-layer
+        // chronological history, not just the active layer.
         IconButton(
-          onPressed: onUndo,
+          onPressed: canUndo ? onUndo : null,
           icon: const Icon(Icons.undo),
           tooltip: 'Undo',
           color: const Color(0xFF4A3F35),
         ),
+        if (onRedo != null)
+          IconButton(
+            onPressed: canRedo ? onRedo : null,
+            icon: const Icon(Icons.redo),
+            tooltip: 'Redo',
+            color: const Color(0xFF4A3F35),
+          ),
         IconButton(
           onPressed: onClear,
           icon: const Icon(Icons.delete_outline),

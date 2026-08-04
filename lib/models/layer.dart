@@ -98,6 +98,27 @@ class DrawingLayer {
   }
 }
 
+/// A single undoable mutation in a [LayerStack]'s chronological history.
+sealed class _StackAction {
+  _StackAction(this.layerId);
+
+  /// The layer the action happened on (undo/redo target it by id, so
+  /// the currently active layer is irrelevant).
+  final String layerId;
+}
+
+/// A stroke was committed to a layer.
+class _StrokeAdded extends _StackAction {
+  _StrokeAdded(super.layerId, this.stroke);
+  final Stroke stroke;
+}
+
+/// A layer was cleared; keeps the removed strokes for undo.
+class _LayerCleared extends _StackAction {
+  _LayerCleared(super.layerId, this.removedStrokes);
+  final List<Stroke> removedStrokes;
+}
+
 /// Manages the layer stack for a card
 class LayerStack {
   final List<DrawingLayer> layers;
@@ -146,19 +167,92 @@ class LayerStack {
     }
   }
 
+  // Cross-layer chronological history (agy M-D2.5 item 6, owner L3:
+  // full three-layer toolbar makes this REQUIRED). Every committed
+  // stroke and every layer clear is one entry, in the order it
+  // happened, regardless of which layer it landed on. Strokes restored
+  // by [LayerStack.fromJson] predate the session and are not undoable.
+  final List<_StackAction> _undoHistory = [];
+  final List<_StackAction> _redoHistory = [];
+
+  /// Whether [undo] has anything to step back through.
+  bool get canUndo => _undoHistory.isNotEmpty;
+
+  /// Whether [redo] has anything to restore.
+  bool get canRedo => _redoHistory.isNotEmpty;
+
+  DrawingLayer? _layerById(String id) {
+    for (final layer in layers) {
+      if (layer.id == id) return layer;
+    }
+    return null;
+  }
+
   void addStrokeToActiveLayer(Stroke stroke) {
     activeLayer.addStroke(stroke);
+    _undoHistory.add(_StrokeAdded(activeLayer.id, stroke));
+    _redoHistory.clear();
     markChanged();
   }
 
-  void undoOnActiveLayer() {
-    activeLayer.removeLastStroke();
+  /// Undo the most recent action (stroke or layer clear) anywhere in
+  /// the stack — chronological, regardless of the active layer.
+  /// Returns false (and bumps nothing) when there is no history.
+  bool undo() {
+    if (_undoHistory.isEmpty) return false;
+    final action = _undoHistory.removeLast();
+    final layer = _layerById(action.layerId);
+    if (layer != null) {
+      switch (action) {
+        case _StrokeAdded(:final stroke):
+          layer.strokes.remove(stroke);
+        case _LayerCleared(:final removedStrokes):
+          // All actions after the clear were undone first, so the layer
+          // holds no post-clear strokes: restoring in place preserves
+          // the original interleave (eraser ordering matters).
+          layer.strokes.insertAll(0, removedStrokes);
+      }
+    }
+    _redoHistory.add(action);
     markChanged();
+    return true;
+  }
+
+  /// Redo the most recently undone action, restoring the stroke (or
+  /// re-clearing the layer) it recorded. Returns false when there is
+  /// nothing to redo.
+  bool redo() {
+    if (_redoHistory.isEmpty) return false;
+    final action = _redoHistory.removeLast();
+    final layer = _layerById(action.layerId);
+    if (layer != null) {
+      switch (action) {
+        case _StrokeAdded(:final stroke):
+          layer.strokes.add(stroke);
+        case _LayerCleared(:final removedStrokes):
+          for (final stroke in removedStrokes) {
+            layer.strokes.remove(stroke);
+          }
+      }
+    }
+    _undoHistory.add(action);
+    markChanged();
+    return true;
   }
 
   /// Clear all strokes from the active layer.
+  ///
+  /// Semantics decision (M-D2.5 item 6): the clear is one **undoable
+  /// batch** — [undo] restores every removed stroke at once, [redo]
+  /// re-clears. Like any new action it resets the redo history.
+  /// Clearing an already-empty layer is a no-op (no history entry, no
+  /// revision bump).
   void clearActiveLayer() {
+    if (activeLayer.strokes.isEmpty) return;
+    _undoHistory.add(
+        _LayerCleared(activeLayer.id, List.of(activeLayer.strokes)));
     activeLayer.clear();
+    _redoHistory.clear();
     markChanged();
   }
 
