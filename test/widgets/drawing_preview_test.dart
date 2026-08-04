@@ -130,6 +130,30 @@ void main() {
     expect(identical(picture2, picture3), isFalse);
   });
 
+  testWidgets('empty stack that gains content starts rendering it',
+      (tester) async {
+    final stack = LayerStack(size: const Size(100, 100));
+
+    Widget build() => _host(
+          DrawingPreview(layerStack: stack, size: const Size(200, 200)),
+        );
+
+    await tester.pumpWidget(build());
+    expect(
+      find.descendant(
+        of: find.byType(DrawingPreview),
+        matching: find.byType(CustomPaint),
+      ),
+      findsNothing,
+    );
+
+    stack.addStrokeToActiveLayer(_line(_midlinePts));
+    await tester.pumpWidget(build());
+
+    final pixels = await _renderedPixels(tester);
+    expect(_alphaAt(pixels, 200, 100, 100), greaterThan(0));
+  });
+
   testWidgets('empty stack renders nothing', (tester) async {
     final stack = LayerStack(size: const Size(100, 100));
 

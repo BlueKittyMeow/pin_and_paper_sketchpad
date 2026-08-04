@@ -26,6 +26,12 @@ import '../rendering/stroke_painter.dart';
 /// Content-change detection: re-records when the [layerStack] instance,
 /// its [LayerStack.revision], or the target [size] changes. Mutations
 /// made behind the stack's back must call [LayerStack.markChanged].
+///
+/// Lifecycle: the picture is recorded in [State.initState] /
+/// [State.didUpdateWidget] and disposed in [State.dispose] — never
+/// allocated or disposed inside `build()`, so no native graphics
+/// resource is torn down while the raster thread may still be painting
+/// a frame that references it.
 class DrawingPreview extends StatefulWidget {
   /// The drawing to render. [LayerStack.size] (capture space) should be
   /// set — as it always is for stacks restored via [LayerStack.fromJson]
@@ -76,16 +82,31 @@ class _DrawingPreviewState extends State<DrawingPreview> {
   bool get _hasVisibleContent => widget.layerStack.visibleLayers
       .any((l) => l.strokes.any((s) => !s.isEraser && s.points.isNotEmpty));
 
-  void _ensurePicture() {
+  @override
+  void initState() {
+    super.initState();
+    _syncPicture();
+  }
+
+  @override
+  void didUpdateWidget(DrawingPreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncPicture();
+  }
+
+  /// Record (or re-record) the picture if content changed; called only
+  /// from lifecycle methods, never from `build()`.
+  void _syncPicture() {
     final stack = widget.layerStack;
-    if (_picture != null &&
-        identical(_recordedStack, stack) &&
+    if (identical(_recordedStack, stack) &&
         _recordedRevision == stack.revision &&
         _recordedSize == widget.size) {
       return; // Content unchanged — reuse the recorded picture.
     }
     _picture?.dispose();
-    _picture = _record(stack);
+    // Empty drawings never record: an absent picture keeps the
+    // zero-overhead SizedBox path in build().
+    _picture = _hasVisibleContent ? _record(stack) : null;
     _recordedStack = stack;
     _recordedRevision = stack.revision;
     _recordedSize = widget.size;
@@ -113,16 +134,16 @@ class _DrawingPreviewState extends State<DrawingPreview> {
 
   @override
   Widget build(BuildContext context) {
-    if (!_hasVisibleContent) {
+    final picture = _picture;
+    if (picture == null) {
       // Nothing to draw — keep the slot's size but paint nothing.
       return SizedBox.fromSize(size: widget.size);
     }
-    _ensurePicture();
     return RepaintBoundary(
       child: CustomPaint(
         size: widget.size,
         isComplex: true,
-        painter: _PicturePainter(_picture!),
+        painter: _PicturePainter(picture),
       ),
     );
   }
