@@ -20,7 +20,68 @@ Widget _buildApp(LayerStack stack) => MaterialApp(
       ),
     );
 
+Widget _sizedApp(LayerStack stack, double width, double height) =>
+    MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: SizedBox(
+            width: width,
+            height: height,
+            child: DrawingCanvas(
+              layerStack: stack,
+              currentColor: const Color(0xFF2D2D2D),
+              strokeOptions: StrokeOptions.ink,
+            ),
+          ),
+        ),
+      ),
+    );
+
 void main() {
+  group('capture-size stamping', () {
+    testWidgets('a fresh LayerStack gets its size stamped from layout, '
+        'so toJson works', (tester) async {
+      final stack = LayerStack();
+      expect(stack.size, isNull);
+
+      await tester.pumpWidget(_buildApp(stack));
+
+      expect(stack.size, const Size(300, 300));
+      expect(stack.toJson()['size'], [300.0, 300.0]);
+    });
+
+    testWidgets('an explicitly set size is never overwritten',
+        (tester) async {
+      final stack = LayerStack(size: const Size(880, 560));
+
+      await tester.pumpWidget(_buildApp(stack));
+
+      expect(stack.size, const Size(880, 560));
+    });
+
+    testWidgets('auto-stamped size follows re-layout while empty, then '
+        'freezes once a stroke lands', (tester) async {
+      final stack = LayerStack();
+      await tester.pumpWidget(_sizedApp(stack, 300, 300));
+      expect(stack.size, const Size(300, 300));
+
+      // Still empty: a resize re-stamps the capture space.
+      await tester.pumpWidget(_sizedApp(stack, 200, 250));
+      expect(stack.size, const Size(200, 250));
+
+      final touch = await tester.createGesture();
+      await touch.down(tester.getCenter(find.byType(DrawingCanvas)));
+      await touch.moveBy(const Offset(10, 0));
+      await touch.up();
+      await tester.pump();
+      expect(stack.activeLayer.strokes, hasLength(1));
+
+      // With content, the capture space is frozen.
+      await tester.pumpWidget(_sizedApp(stack, 300, 300));
+      expect(stack.size, const Size(200, 250));
+    });
+  });
+
   testWidgets('a second touch pointer cannot interleave points into an '
       'in-progress stylus stroke', (tester) async {
     final stack = LayerStack();

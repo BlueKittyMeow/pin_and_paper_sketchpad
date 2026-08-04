@@ -192,9 +192,12 @@ class LayerStack {
     final captureSize = size;
     if (captureSize == null) {
       throw StateError(
-          'LayerStack.size must be set before serializing: format v1 '
-          'requires the capture-space size so drawings can be scaled to '
-          'their render target.');
+          'LayerStack.size is unset: format v1 requires the capture-space '
+          'size so drawings can be scaled to their render target. '
+          'DrawingCanvas stamps it automatically from its laid-out '
+          'dimensions once it builds; if this stack never reached a '
+          'DrawingCanvas, set LayerStack.size yourself before calling '
+          'toJson().');
     }
     return {
       'v': 1,

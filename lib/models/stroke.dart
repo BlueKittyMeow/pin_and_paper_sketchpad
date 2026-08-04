@@ -4,8 +4,14 @@ import 'dart:ui';
 double round2(double value) => (value * 100).roundToDouble() / 100;
 
 /// Serialize a color as an ARGB hex string, e.g. `#FF4A3F35`.
+///
+/// The `& 0xFFFFFFFF` mask is belt-and-braces: `toARGB32()` already
+/// returns a non-negative value for every color (Dart ints are not
+/// Java ints — verified by test), so the mask never changes the result;
+/// it just makes "the radix string can never be negative" a local
+/// guarantee instead of an upstream contract.
 String colorToHex(Color color) =>
-    '#${color.toARGB32().toRadixString(16).padLeft(8, '0').toUpperCase()}';
+    '#${(color.toARGB32() & 0xFFFFFFFF).toRadixString(16).padLeft(8, '0').toUpperCase()}';
 
 /// Parse an ARGB hex string produced by [colorToHex].
 Color colorFromHex(String hex) {
@@ -66,17 +72,30 @@ class Stroke {
         ],
       };
 
+  /// Throws [FormatException] for malformed point entries (anything
+  /// that is not an `[x, y, pressure]` array of at least 3 numbers)
+  /// instead of leaking a RangeError/TypeError from blind indexing.
   factory Stroke.fromJson(Map<String, dynamic> json) {
     final rawPoints = json['points'] as List<dynamic>? ?? const [];
+    final points = <StrokePoint>[];
+    for (final p in rawPoints) {
+      if (p is! List ||
+          p.length < 3 ||
+          p[0] is! num ||
+          p[1] is! num ||
+          p[2] is! num) {
+        throw FormatException(
+            'Invalid stroke point: expected an [x, y, pressure] array of '
+            'numbers, got: $p');
+      }
+      points.add(StrokePoint(
+        (p[0] as num).toDouble(),
+        (p[1] as num).toDouble(),
+        (p[2] as num).toDouble(),
+      ));
+    }
     return Stroke(
-      points: [
-        for (final p in rawPoints)
-          StrokePoint(
-            ((p as List<dynamic>)[0] as num).toDouble(),
-            (p[1] as num).toDouble(),
-            (p[2] as num).toDouble(),
-          ),
-      ],
+      points: points,
       color: colorFromHex(json['color'] as String),
       options:
           StrokeOptions.fromJson(json['options'] as Map<String, dynamic>),

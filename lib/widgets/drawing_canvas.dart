@@ -33,6 +33,9 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   List<StrokePoint> _currentPoints = [];
   double _lastPressure = 0.0;
 
+  /// Whether this canvas (not the caller) set the stack's capture size.
+  bool _autoStampedSize = false;
+
   /// The pointer currently drawing the in-progress stroke. Events from any
   /// other pointer (second finger, resting palm) are ignored so they cannot
   /// interleave points into the active stroke.
@@ -157,8 +160,38 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     return 0.5;
   }
 
+  /// Stamp the stack's capture-space size from the canvas's laid-out
+  /// dimensions, so a fresh `LayerStack()` can serialize without the
+  /// editor remembering to set [LayerStack.size] by hand. Strokes are
+  /// recorded in this canvas's local coordinates, so its laid-out size
+  /// IS the capture space.
+  ///
+  /// An explicitly caller-set size is never overwritten. While the
+  /// stack is still empty, a re-layout (e.g. device rotation before the
+  /// first stroke) re-stamps so the capture space matches where strokes
+  /// actually land; once strokes exist the size is frozen.
+  void _stampCaptureSize(Size laidOut) {
+    if (!laidOut.isFinite || laidOut.isEmpty) return;
+    final stack = widget.layerStack;
+    if (stack.size == null) {
+      stack.size = laidOut;
+      _autoStampedSize = true;
+    } else if (_autoStampedSize &&
+        stack.size != laidOut &&
+        stack.layers.every((l) => l.strokes.isEmpty)) {
+      stack.size = laidOut;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, constraints) {
+      _stampCaptureSize(constraints.biggest);
+      return _buildCanvas();
+    });
+  }
+
+  Widget _buildCanvas() {
     return Listener(
       behavior: HitTestBehavior.opaque,
       onPointerDown: _onPointerDown,

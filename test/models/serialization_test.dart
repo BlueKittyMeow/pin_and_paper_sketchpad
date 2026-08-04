@@ -81,6 +81,39 @@ void main() {
     });
   });
 
+  group('colorToHex', () {
+    // agy's review claimed Color.toARGB32().toRadixString(16) can go
+    // negative (a Java-ism). Dart ints are 64-bit and toARGB32() is
+    // documented non-negative — these extreme colors prove it. The
+    // uint32 mask in colorToHex is applied anyway as free hardening.
+    const extremes = [
+      Color(0xFF000000), // opaque black — high bit set in ARGB
+      Color(0xFFFFFFFF), // opaque white — all bits set
+      Color(0x00000000), // fully transparent black
+      Color(0x00FFFFFF), // alpha 0, full RGB
+      Color(0x80FF0000), // half-alpha pure red
+    ];
+
+    test('toARGB32 never returns a negative value (agy claim disproved)',
+        () {
+      for (final color in extremes) {
+        expect(color.toARGB32(), greaterThanOrEqualTo(0));
+        expect(color.toARGB32().toRadixString(16), isNot(startsWith('-')));
+      }
+    });
+
+    test('extreme colors serialize to 8-digit hex and round-trip', () {
+      for (final color in extremes) {
+        final hex = colorToHex(color);
+        expect(hex, matches(RegExp(r'^#[0-9A-F]{8}$')));
+        expect(colorFromHex(hex).toARGB32(), color.toARGB32());
+      }
+      expect(colorToHex(const Color(0xFF000000)), '#FF000000');
+      expect(colorToHex(const Color(0xFFFFFFFF)), '#FFFFFFFF');
+      expect(colorToHex(const Color(0x00000000)), '#00000000');
+    });
+  });
+
   group('Serialization format v1', () {
     test('top-level shape is {"v":1,"size":[w,h],"layers":[...]}', () {
       final json = _sampleStack().toJson();
@@ -199,6 +232,53 @@ void main() {
       expect(
         () => LayerStack.fromJson({...good, 'layers': layers}),
         throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('malformed point arrays throw FormatException, not RangeError',
+        () {
+      final good = _sampleStack().toJson();
+
+      Map<String, dynamic> withPoints(List<dynamic> points) {
+        final layers =
+            (jsonDecode(jsonEncode(good))['layers'] as List)
+                .cast<Map<String, dynamic>>();
+        ((layers[1]['strokes'] as List)[0]
+            as Map<String, dynamic>)['points'] = points;
+        return {...good, 'layers': layers};
+      }
+
+      final formatError = throwsA(isA<FormatException>().having(
+        (e) => e.message,
+        'message',
+        contains('[x, y, pressure]'),
+      ));
+
+      // Truncated triple.
+      expect(
+        () => LayerStack.fromJson(withPoints([
+          [10.0, 20.0]
+        ])),
+        formatError,
+      );
+      // Non-numeric entries.
+      expect(
+        () => LayerStack.fromJson(withPoints([
+          ['a', 'b', 'c']
+        ])),
+        formatError,
+      );
+      // Not an array at all.
+      expect(
+        () => LayerStack.fromJson(withPoints(['oops'])),
+        formatError,
+      );
+      // Null coordinate.
+      expect(
+        () => LayerStack.fromJson(withPoints([
+          [1.0, null, 0.5]
+        ])),
+        formatError,
       );
     });
 
