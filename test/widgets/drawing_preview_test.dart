@@ -207,6 +207,32 @@ void main() {
     expect(_alphaAt(pixels, 200, 4, 4), 0);
   });
 
+  testWidgets('hairline strokes scaled down 4x still paint at the '
+      'minimum width floor', (tester) async {
+    // A 1px hairline in a 400x400 capture space rendered on a 100x100
+    // target would paint at 0.25px — nearly invisible. The floor
+    // guarantees ~0.75px of painted coverage.
+    final stack = LayerStack(size: const Size(400, 400));
+    stack.addStrokeToActiveLayer(_line(
+      [for (var x = 40.0; x <= 360.0; x += 40.0) const Offset(0, 200) + Offset(x, 0)],
+      size: 1.0,
+    ));
+
+    await tester.pumpWidget(_host(
+      DrawingPreview(layerStack: stack, size: const Size(100, 100)),
+    ));
+
+    final pixels = await _renderedPixels(tester);
+    // Total alpha coverage down the column crossing the line ~= painted
+    // width in px * 255. Unfloored 0.25px would give ~64; the 0.75px
+    // floor gives ~191. Assert comfortably above the unfloored value.
+    var coverage = 0;
+    for (var y = 40; y <= 60; y++) {
+      coverage += _alphaAt(pixels, 100, 50, y);
+    }
+    expect(coverage, greaterThanOrEqualTo(150));
+  });
+
   testWidgets('hidden layers are not rendered', (tester) async {
     final visibleLayer = DrawingLayer(id: 'a', name: 'A')
       ..addStroke(_line(_midlinePts));

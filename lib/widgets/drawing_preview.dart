@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -122,6 +123,8 @@ class _DrawingPreviewState extends State<DrawingPreview> {
       canvas,
       stack,
       Rect.fromLTWH(0, 0, capture.width, capture.height),
+      // Worst-case shrink axis governs the min painted stroke width.
+      scale: math.min(scale.dx, scale.dy),
     );
     return recorder.endRecording();
   }

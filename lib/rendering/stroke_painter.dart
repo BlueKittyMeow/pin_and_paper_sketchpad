@@ -10,9 +10,30 @@ import '../models/stroke.dart';
 /// drawings replay exactly like they looked in the editor (same
 /// saveLayer/opacity/blend/eraser semantics).
 ///
+/// Minimum painted stroke width, in logical pixels at the final painted
+/// size. Prevents fine strokes from thinning into near-invisibility when
+/// a capture-space drawing is scaled far down (e.g. an 880x560 editor
+/// drawing replayed on a 220x140 card, or further shrunk by desk zoom).
+const double kMinPaintedStrokeWidth = 0.75;
+
+/// Capture-space stroke size floored so that after multiplying by
+/// [scale] (capture -> painted) the painted width is at least
+/// [kMinPaintedStrokeWidth]. At scale >= 1 normal sizes pass through
+/// untouched.
+double effectiveStrokeSize(double size, double scale) {
+  if (scale <= 0) return size;
+  final floor = kMinPaintedStrokeWidth / scale;
+  return size < floor ? floor : size;
+}
+
 /// [bounds] is the capture-space rect used for each layer's `saveLayer`.
 /// The optional in-progress stroke is drawn on top of the active layer's
 /// committed strokes (only the live editor passes one).
+///
+/// [scale] is the capture-space -> painted-size factor the caller will
+/// apply around this call (e.g. `DrawingPreview`'s `canvas.scale`); it
+/// is used only to enforce [kMinPaintedStrokeWidth] on downscaled
+/// strokes.
 void paintLayerStack(
   Canvas canvas,
   LayerStack layerStack,
@@ -21,6 +42,7 @@ void paintLayerStack(
   Color inProgressColor = const Color(0xFF000000),
   StrokeOptions inProgressOptions = const StrokeOptions(),
   bool inProgressIsEraser = false,
+  double scale = 1.0,
 }) {
   for (final layer in layerStack.visibleLayers) {
     // Save canvas state for layer opacity/blend
@@ -38,6 +60,7 @@ void paintLayerStack(
         stroke.points,
         stroke.options,
         paint: stroke.isEraser ? eraserPaint() : inkPaint(stroke.color),
+        scale: scale,
       );
     }
 
@@ -50,6 +73,7 @@ void paintLayerStack(
         inProgressOptions,
         paint:
             inProgressIsEraser ? eraserPaint() : inkPaint(inProgressColor),
+        scale: scale,
       );
     }
 
@@ -71,11 +95,15 @@ Paint eraserPaint() => Paint()
   ..isAntiAlias = true;
 
 /// Tessellate [points] with perfect_freehand and fill the outline.
+///
+/// [scale] (capture -> painted) floors the tessellated stroke size so
+/// the painted width never drops below [kMinPaintedStrokeWidth].
 void drawFreehandStroke(
   Canvas canvas,
   List<StrokePoint> points,
   StrokeOptions options, {
   required Paint paint,
+  double scale = 1.0,
 }) {
   if (points.isEmpty) return;
 
@@ -87,7 +115,7 @@ void drawFreehandStroke(
   final outlinePoints = pf.getStroke(
     pfPoints,
     options: pf.StrokeOptions(
-      size: options.size,
+      size: effectiveStrokeSize(options.size, scale),
       thinning: options.thinning,
       smoothing: options.smoothing,
       streamline: options.streamline,
