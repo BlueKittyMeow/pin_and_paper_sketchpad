@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../models/stroke.dart';
@@ -35,6 +37,73 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
 
   /// Whether this canvas (not the caller) set the stack's capture size.
   bool _autoStampedSize = false;
+
+  /// Committed strokes baked into one `ui.Picture` per layer, keyed on
+  /// [LayerStack.revision]. During a live stroke only the in-progress
+  /// points are re-tessellated each frame; committed strokes replay
+  /// from these pictures. Same lifecycle discipline as
+  /// `DrawingPreview`: recorded in initState/didUpdateWidget (and at
+  /// stroke commit), disposed in dispose() — never managed in build().
+  List<ui.Picture> _bakedLayerPictures = const [];
+  LayerStack? _bakedStack;
+  int _bakedRevision = -1;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncBakedPictures();
+  }
+
+  @override
+  void didUpdateWidget(DrawingCanvas oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncBakedPictures();
+  }
+
+  @override
+  void dispose() {
+    _disposeBakedPictures();
+    super.dispose();
+  }
+
+  void _disposeBakedPictures() {
+    for (final picture in _bakedLayerPictures) {
+      picture.dispose();
+    }
+    _bakedLayerPictures = const [];
+  }
+
+  /// Re-bake committed strokes if the stack's content changed.
+  void _syncBakedPictures() {
+    final stack = widget.layerStack;
+    if (identical(_bakedStack, stack) && _bakedRevision == stack.revision) {
+      return; // Content unchanged — keep the baked pictures.
+    }
+    _disposeBakedPictures();
+    _bakedLayerPictures = [
+      for (final layer in stack.layers) _bakeLayer(layer),
+    ];
+    _bakedStack = stack;
+    _bakedRevision = stack.revision;
+  }
+
+  /// Record one layer's committed strokes (interleaved ink + eraser,
+  /// same order as the un-baked path). saveLayer/opacity/blend are NOT
+  /// part of the picture — they're applied at paint time, so layer
+  /// property changes don't invalidate stroke tessellation.
+  ui.Picture _bakeLayer(DrawingLayer layer) {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    for (final stroke in layer.strokes) {
+      drawFreehandStroke(
+        canvas,
+        stroke.points,
+        stroke.options,
+        paint: stroke.isEraser ? eraserPaint() : inkPaint(stroke.color),
+      );
+    }
+    return recorder.endRecording();
+  }
 
   /// The pointer currently drawing the in-progress stroke. Events from any
   /// other pointer (second finger, resting palm) are ignored so they cannot
@@ -119,6 +188,9 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     widget.layerStack.addStrokeToActiveLayer(stroke);
 
     setState(() {
+      // Fold the freshly committed stroke into the baked pictures now —
+      // setState alone rebuilds this State without didUpdateWidget.
+      _syncBakedPictures();
       _currentPoints = [];
     });
 
@@ -214,6 +286,8 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
             child: CustomPaint(
               painter: _DrawingPainter(
                 layerStack: widget.layerStack,
+                revision: widget.layerStack.revision,
+                bakedLayerPictures: _bakedLayerPictures,
                 currentPoints: _currentPoints,
                 currentColor: widget.currentColor,
                 strokeOptions: widget.strokeOptions,
@@ -253,21 +327,30 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   }
 }
 
-/// CustomPainter that renders all layers and strokes
+/// CustomPainter that composites the baked committed-stroke pictures
+/// and tessellates ONLY the in-progress stroke live.
 class _DrawingPainter extends CustomPainter {
   final LayerStack layerStack;
+  final int revision;
+  final List<ui.Picture> bakedLayerPictures;
   final List<StrokePoint> currentPoints;
+
+  /// [currentPoints] is mutated in place during a stroke; the count
+  /// captured at construction lets [shouldRepaint] see growth.
+  final int currentPointCount;
   final Color currentColor;
   final StrokeOptions strokeOptions;
   final bool isEraserActive;
 
   _DrawingPainter({
     required this.layerStack,
+    required this.revision,
+    required this.bakedLayerPictures,
     required this.currentPoints,
     required this.currentColor,
     required this.strokeOptions,
     this.isEraserActive = false,
-  });
+  }) : currentPointCount = currentPoints.length;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -281,11 +364,21 @@ class _DrawingPainter extends CustomPainter {
       inProgressColor: currentColor,
       inProgressOptions: strokeOptions,
       inProgressIsEraser: isEraserActive,
+      bakedLayerPictures:
+          bakedLayerPictures.length == layerStack.layers.length
+              ? bakedLayerPictures
+              : null,
     );
   }
 
   @override
-  bool shouldRepaint(_DrawingPainter oldDelegate) {
-    return true; // Always repaint during active drawing
-  }
+  bool shouldRepaint(_DrawingPainter oldDelegate) =>
+      oldDelegate.revision != revision ||
+      !identical(oldDelegate.layerStack, layerStack) ||
+      !identical(oldDelegate.bakedLayerPictures, bakedLayerPictures) ||
+      !identical(oldDelegate.currentPoints, currentPoints) ||
+      oldDelegate.currentPointCount != currentPointCount ||
+      oldDelegate.currentColor != currentColor ||
+      oldDelegate.strokeOptions != strokeOptions ||
+      oldDelegate.isEraserActive != isEraserActive;
 }

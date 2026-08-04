@@ -34,6 +34,13 @@ double effectiveStrokeSize(double size, double scale) {
 /// apply around this call (e.g. `DrawingPreview`'s `canvas.scale`); it
 /// is used only to enforce [kMinPaintedStrokeWidth] on downscaled
 /// strokes.
+///
+/// [bakedLayerPictures], when provided, must run parallel to
+/// `layerStack.layers`: each entry is a pre-recorded picture of that
+/// layer's committed strokes (see `DrawingCanvas`). Committed strokes
+/// then replay from the pictures instead of being re-tessellated —
+/// each still inside its layer's `saveLayer`, so opacity, blend modes,
+/// and eraser `dstOut` semantics are identical to the un-baked path.
 void paintLayerStack(
   Canvas canvas,
   LayerStack layerStack,
@@ -43,8 +50,14 @@ void paintLayerStack(
   StrokeOptions inProgressOptions = const StrokeOptions(),
   bool inProgressIsEraser = false,
   double scale = 1.0,
+  List<Picture>? bakedLayerPictures,
 }) {
-  for (final layer in layerStack.visibleLayers) {
+  assert(bakedLayerPictures == null ||
+      bakedLayerPictures.length == layerStack.layers.length);
+  for (var i = 0; i < layerStack.layers.length; i++) {
+    final layer = layerStack.layers[i];
+    if (!layer.visible) continue;
+
     // Save canvas state for layer opacity/blend
     canvas.saveLayer(
       bounds,
@@ -53,15 +66,21 @@ void paintLayerStack(
         ..blendMode = layer.blendMode,
     );
 
-    // Draw strokes interleaved — eraser strokes use dstOut to cut holes
-    for (final stroke in layer.strokes) {
-      drawFreehandStroke(
-        canvas,
-        stroke.points,
-        stroke.options,
-        paint: stroke.isEraser ? eraserPaint() : inkPaint(stroke.color),
-        scale: scale,
-      );
+    if (bakedLayerPictures != null && i < bakedLayerPictures.length) {
+      // Committed strokes replay from the pre-recorded picture.
+      canvas.drawPicture(bakedLayerPictures[i]);
+    } else {
+      // Draw strokes interleaved — eraser strokes use dstOut to cut
+      // holes
+      for (final stroke in layer.strokes) {
+        drawFreehandStroke(
+          canvas,
+          stroke.points,
+          stroke.options,
+          paint: stroke.isEraser ? eraserPaint() : inkPaint(stroke.color),
+          scale: scale,
+        );
+      }
     }
 
     // Draw the in-progress stroke inside its own layer

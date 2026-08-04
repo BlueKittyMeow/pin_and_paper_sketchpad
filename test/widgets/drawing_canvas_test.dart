@@ -1,6 +1,8 @@
 import 'dart:ui';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pin_and_paper_sketchpad/sketchpad.dart';
 
@@ -212,6 +214,120 @@ void main() {
     for (final p in points) {
       expect(p.pressure, 0.5);
     }
+  });
+
+  group('baked committed strokes', () {
+    /// The baked per-layer pictures list held by the canvas's painter.
+    /// A re-bake always produces a new list, so list identity proves
+    /// whether committed strokes were re-recorded.
+    List<Object?> bakedPictures(WidgetTester tester) {
+      final paints = tester.widgetList<CustomPaint>(find.descendant(
+        of: find.byType(DrawingCanvas),
+        matching: find.byType(CustomPaint),
+      ));
+      for (final paint in paints) {
+        final painter = paint.painter;
+        if (painter != null &&
+            painter.runtimeType.toString() == '_DrawingPainter') {
+          return (painter as dynamic).bakedLayerPictures as List<Object?>;
+        }
+      }
+      fail('DrawingCanvas painter not found');
+    }
+
+    testWidgets('are not re-recorded while only the in-progress stroke '
+        'changes', (tester) async {
+      final stack = LayerStack();
+      await tester.pumpWidget(_buildApp(stack));
+      final center = tester.getCenter(find.byType(DrawingCanvas));
+
+      // Commit one stroke so there is baked content.
+      final first = await tester.createGesture();
+      await first.down(center);
+      await first.moveBy(const Offset(20, 0));
+      await first.up();
+      await tester.pump();
+      final afterCommit = bakedPictures(tester);
+
+      // Draw a second stroke: every pointer-move frame must reuse the
+      // same baked pictures (no committed-stroke re-tessellation).
+      final gesture = await tester.createGesture();
+      await gesture.down(center + const Offset(0, 30));
+      await tester.pump();
+      expect(identical(bakedPictures(tester), afterCommit), isTrue);
+      await gesture.moveBy(const Offset(10, 0));
+      await tester.pump();
+      expect(identical(bakedPictures(tester), afterCommit), isTrue);
+      await gesture.moveBy(const Offset(10, 0));
+      await tester.pump();
+      final duringStroke = bakedPictures(tester);
+      expect(identical(duringStroke, afterCommit), isTrue);
+
+      // Committing the stroke re-bakes.
+      await gesture.up();
+      await tester.pump();
+      expect(identical(bakedPictures(tester), duringStroke), isFalse);
+      expect(stack.activeLayer.strokes, hasLength(2));
+    });
+
+    testWidgets('baked compositing still paints committed and live '
+        'strokes', (tester) async {
+      final stack = LayerStack();
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: Center(
+            child: RepaintBoundary(
+              child: SizedBox(
+                width: 300,
+                height: 300,
+                child: DrawingCanvas(
+                  layerStack: stack,
+                  currentColor: const Color(0xFF2D2D2D),
+                  strokeOptions: const StrokeOptions(
+                    size: 10,
+                    thinning: 0,
+                    smoothing: 0,
+                    streamline: 0,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      final center = tester.getCenter(find.byType(DrawingCanvas));
+
+      Future<int> alphaAtLocal(int x, int y) async {
+        final boundary = tester.renderObject<RenderRepaintBoundary>(
+            find.byType(RepaintBoundary).last);
+        final data = await tester.runAsync(() async {
+          final image = await boundary.toImage();
+          final bytes =
+              await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+          image.dispose();
+          return bytes;
+        });
+        return data!.getUint8((y * 300 + x) * 4 + 3);
+      }
+
+      // Live: mid-gesture, the in-progress stroke is visible.
+      final gesture = await tester.createGesture();
+      await gesture.down(center + const Offset(-30, 0));
+      await gesture.moveBy(const Offset(30, 0));
+      await gesture.moveBy(const Offset(30, 0));
+      await tester.pump();
+      expect(await alphaAtLocal(150, 150), greaterThan(0));
+
+      // Committed: after pointer-up the stroke replays from the baked
+      // pictures and stays visible.
+      await gesture.up();
+      await tester.pump();
+      expect(stack.activeLayer.strokes, hasLength(1));
+      expect(await alphaAtLocal(150, 150), greaterThan(0));
+      // Off-stroke stays clear.
+      expect(await alphaAtLocal(150, 240), 0);
+    });
   });
 
   testWidgets('strokes land on the active layer and respect the eraser flag',
