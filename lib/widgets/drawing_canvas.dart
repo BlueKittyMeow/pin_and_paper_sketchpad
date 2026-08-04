@@ -1,8 +1,8 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:perfect_freehand/perfect_freehand.dart' as pf;
 import '../models/stroke.dart';
 import '../models/layer.dart';
+import '../rendering/stroke_painter.dart';
 
 /// The main drawing canvas widget
 class DrawingCanvas extends StatefulWidget {
@@ -240,102 +240,15 @@ class _DrawingPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final rect = Rect.fromLTWH(0, 0, size.width, size.height);
 
-    // Render each visible layer
-    for (final layer in layerStack.visibleLayers) {
-      // Save canvas state for layer opacity/blend
-      canvas.saveLayer(
-        rect,
-        Paint()
-          ..color = Colors.white.withValues(alpha: layer.opacity)
-          ..blendMode = layer.blendMode,
-      );
-
-      // Draw strokes interleaved — eraser strokes use dstOut to cut holes
-      for (final stroke in layer.strokes) {
-        if (stroke.isEraser) {
-          _drawStroke(canvas, stroke.points, stroke.options,
-              paint: Paint()
-                ..blendMode = BlendMode.dstOut
-                ..color = Colors.white
-                ..style = PaintingStyle.fill
-                ..isAntiAlias = true);
-        } else {
-          _drawStroke(canvas, stroke.points, stroke.options,
-              paint: Paint()
-                ..color = stroke.color
-                ..style = PaintingStyle.fill
-                ..isAntiAlias = true);
-        }
-      }
-
-      // Draw current stroke in-progress inside its own layer
-      final isActiveLayer = layer == layerStack.activeLayer;
-      if (isActiveLayer && currentPoints.isNotEmpty) {
-        if (isEraserActive) {
-          _drawStroke(canvas, currentPoints, strokeOptions,
-              paint: Paint()
-                ..blendMode = BlendMode.dstOut
-                ..color = Colors.white
-                ..style = PaintingStyle.fill
-                ..isAntiAlias = true);
-        } else {
-          _drawStroke(canvas, currentPoints, strokeOptions,
-              paint: Paint()
-                ..color = currentColor
-                ..style = PaintingStyle.fill
-                ..isAntiAlias = true);
-        }
-      }
-
-      canvas.restore();
-    }
-  }
-
-  void _drawStroke(
-    Canvas canvas,
-    List<StrokePoint> points,
-    StrokeOptions options, {
-    required Paint paint,
-  }) {
-    if (points.isEmpty) return;
-
-    // Convert to perfect_freehand input format
-    final pfPoints = points
-        .map((p) => pf.PointVector(p.x, p.y, p.pressure))
-        .toList();
-
-    // Get the outline points from perfect_freehand
-    final outlinePoints = pf.getStroke(
-      pfPoints,
-      options: pf.StrokeOptions(
-        size: options.size,
-        thinning: options.thinning,
-        smoothing: options.smoothing,
-        streamline: options.streamline,
-        start: pf.StrokeEndOptions.start(
-          customTaper: options.taperStart > 0 ? options.taperStart : null,
-          taperEnabled: options.taperStart > 0,
-        ),
-        end: pf.StrokeEndOptions.end(
-          customTaper: options.taperEnd > 0 ? options.taperEnd : null,
-          taperEnabled: options.taperEnd > 0,
-        ),
-        simulatePressure: options.simulatePressure,
-      ),
+    paintLayerStack(
+      canvas,
+      layerStack,
+      rect,
+      inProgressPoints: currentPoints,
+      inProgressColor: currentColor,
+      inProgressOptions: strokeOptions,
+      inProgressIsEraser: isEraserActive,
     );
-
-    if (outlinePoints.isEmpty) return;
-
-    // Build path from outline points
-    final path = Path();
-    path.moveTo(outlinePoints.first.dx, outlinePoints.first.dy);
-
-    for (int i = 1; i < outlinePoints.length; i++) {
-      path.lineTo(outlinePoints[i].dx, outlinePoints[i].dy);
-    }
-    path.close();
-
-    canvas.drawPath(path, paint);
   }
 
   @override

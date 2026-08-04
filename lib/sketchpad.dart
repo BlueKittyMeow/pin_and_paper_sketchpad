@@ -50,4 +50,5 @@ export 'models/layer.dart';
 
 // Widgets
 export 'widgets/drawing_canvas.dart';
+export 'widgets/drawing_preview.dart';
 export 'widgets/toolbar.dart';

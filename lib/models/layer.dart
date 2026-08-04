@@ -128,6 +128,18 @@ class LayerStack {
   DrawingLayer get activeLayer => layers[_activeLayerIndex];
   int get activeLayerIndex => _activeLayerIndex;
 
+  /// Monotonic content revision. Bumped by every mutation that changes
+  /// rendered output; cached renderers (e.g. `DrawingPreview`) compare it
+  /// to decide when to re-record. If you mutate a [DrawingLayer] directly
+  /// (bypassing the LayerStack methods), call [markChanged] yourself.
+  int get revision => _revision;
+  int _revision = 0;
+
+  /// Record that rendered content changed (see [revision]).
+  void markChanged() {
+    _revision++;
+  }
+
   void setActiveLayer(int index) {
     if (index >= 0 && index < layers.length) {
       _activeLayerIndex = index;
@@ -136,20 +148,24 @@ class LayerStack {
 
   void addStrokeToActiveLayer(Stroke stroke) {
     activeLayer.addStroke(stroke);
+    markChanged();
   }
 
   void undoOnActiveLayer() {
     activeLayer.removeLastStroke();
+    markChanged();
   }
 
   /// Clear all strokes from the active layer.
   void clearActiveLayer() {
     activeLayer.clear();
+    markChanged();
   }
 
   void toggleLayerVisibility(int index) {
     if (index >= 0 && index < layers.length) {
       layers[index].visible = !layers[index].visible;
+      markChanged();
     }
   }
 
@@ -160,6 +176,7 @@ class LayerStack {
       layer.blendMode = layer.blendMode == BlendMode.multiply
           ? BlendMode.srcOver
           : BlendMode.multiply;
+      markChanged();
     }
   }
 
