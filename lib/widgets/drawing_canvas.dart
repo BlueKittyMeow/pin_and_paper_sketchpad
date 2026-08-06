@@ -148,7 +148,6 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         stroke.points,
         stroke.options,
         paint: stroke.isEraser ? eraserPaint() : inkPaint(resolved),
-        widthReferenceColor: stroke.isEraser ? null : resolved,
       );
     }
     return recorder.endRecording();

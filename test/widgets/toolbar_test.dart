@@ -47,9 +47,10 @@ void main() {
         onOptionsChanged: (_) {},
       ));
 
-      // "Sketch" also appears as a preset-button label in the tool row —
-      // the layer chip is built first (layer row precedes tool row).
-      await tester.tap(find.text('Sketch').first);
+      // The layer chip is the ONLY "Sketch" in the toolbar now — the old
+      // duplicate preset-button row was removed in the owner's
+      // chip+eyeball unification (2026-08-06).
+      await tester.tap(find.text('Sketch'));
       await tester.pump();
 
       expect(selected, 1); // Sketch is layers[1] in the default stack

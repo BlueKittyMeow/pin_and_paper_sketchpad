@@ -130,10 +130,13 @@ class DrawingToolbar extends StatelessWidget {
 
   /// One layer's go-to-layer chip + its own visibility eyeball, tapped
   /// independently (owner 2026-08-06): tapping the name switches to that
-  /// layer via [onLayerSelected]; tapping the eye toggles that layer's
-  /// visibility via [onVisibilityToggled] — previously the whole element
-  /// was ONE tap target that only toggled visibility, with no way to
-  /// select a layer from this row at all. A light-opacity ring around
+  /// layer (selecting it AND applying its default tool options, exactly
+  /// what the old Sketch/Ink/Color preset buttons in the tool row did —
+  /// this row REPLACES them, completing the owner's unification: one
+  /// place with the layer names, eyeball adjacent); tapping the eye
+  /// toggles that layer's visibility via [onVisibilityToggled].
+  /// Previously the names lived twice — a visibility-only row up here
+  /// and the selecting preset buttons below. A light-opacity ring around
   /// both pieces together is the "these two belong to each other"
   /// grouping cue, so ownership reads at a glance even though they're
   /// separately tappable.
@@ -153,9 +156,14 @@ class DrawingToolbar extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Go-to-layer chip.
+          // Go-to-layer chip. Fires both callbacks the old preset
+          // buttons fired, so consumers that only listen to
+          // onOptionsChanged keep working.
           GestureDetector(
-            onTap: () => onLayerSelected(index),
+            onTap: () {
+              onLayerSelected(index);
+              onOptionsChanged(layer.defaultOptions);
+            },
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               decoration: BoxDecoration(
@@ -315,12 +323,8 @@ class DrawingToolbar extends StatelessWidget {
   Widget _buildToolRow() {
     return Row(
       children: [
-        // Preset buttons — also select the corresponding layer
-        _buildPresetButton('Sketch', StrokeOptions.sketch, 1),
-        _buildPresetButton('Ink', StrokeOptions.ink, 2),
-        _buildPresetButton('Color', StrokeOptions.watercolor, 0),
-        const SizedBox(width: 8),
-        // Eraser toggle
+        // Layer/tool selection lives in the layer-chip row now (owner
+        // 2026-08-06 unification) — this row keeps the eraser + actions.
         _buildEraserButton(),
 
         const Spacer(),
@@ -375,28 +379,4 @@ class DrawingToolbar extends StatelessWidget {
     );
   }
 
-  Widget _buildPresetButton(String label, StrokeOptions options, int layerIndex) {
-    final isSelected = !isEraserActive && currentOptions == options;
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: ElevatedButton(
-        onPressed: () {
-          onLayerSelected(layerIndex);
-          onOptionsChanged(options);
-        },
-        style: ElevatedButton.styleFrom(
-          backgroundColor: isSelected 
-              ? const Color(0xFF8B7355) 
-              : Colors.white,
-          foregroundColor: isSelected 
-              ? Colors.white 
-              : const Color(0xFF4A3F35),
-          elevation: isSelected ? 2 : 0,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          minimumSize: Size.zero,
-        ),
-        child: Text(label, style: const TextStyle(fontSize: 12)),
-      ),
-    );
-  }
 }

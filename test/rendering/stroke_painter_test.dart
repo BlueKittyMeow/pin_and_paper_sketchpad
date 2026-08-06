@@ -4,52 +4,21 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pin_and_paper_sketchpad/rendering/stroke_painter.dart';
 
 void main() {
-  group('perceptualWidthMultiplier (owner bug report: "purple marker '
-      'draws thinner", 2026-08-06)', () {
-    // The palette's muted-lavender "purple" swatch (see toolbar.dart).
-    const purple = Color(0xFF9B8FA5);
-    const nearBlack = Color(0xFF2D2D2D);
-    const white = Color(0xFFFFFFFF);
-
-    test('a low-contrast color against the paper gets a width boost', () {
-      expect(perceptualWidthMultiplier(purple), greaterThan(1.0));
-    });
-
-    test('a high-contrast color (near-black ink) is left untouched', () {
-      expect(perceptualWidthMultiplier(nearBlack), 1.0);
-    });
-
-    test('white (near-invisible against paper) saturates at the max boost',
-        () {
-      expect(perceptualWidthMultiplier(white), 1.35);
-    });
-
-    test('boost is monotonic with contrast: purple < white', () {
-      // Purple has *some* contrast against the paper; white has almost
-      // none — white should never be boosted less than purple.
-      expect(perceptualWidthMultiplier(white),
-          greaterThanOrEqualTo(perceptualWidthMultiplier(purple)));
-    });
-  });
-
-  group('effectiveStrokeSize + color: purple visually matches other colors',
-      () {
-    test('at identical StrokeOptions.size, purple paints wider than black '
-        'so the two read as the same apparent width', () {
-      const size = 3.0; // StrokeOptions.ink's size
-      const purple = Color(0xFF9B8FA5);
-      const nearBlack = Color(0xFF2D2D2D);
-
-      final purpleWidth = effectiveStrokeSize(size, 1.0, color: purple);
-      final blackWidth = effectiveStrokeSize(size, 1.0, color: nearBlack);
-
-      expect(purpleWidth, greaterThan(blackWidth));
-      expect(blackWidth, size); // unboosted baseline unaffected
-    });
-
-    test('omitting color is identical to the old (pre-fix) behavior', () {
+  group('effectiveStrokeSize is color-blind', () {
+    // Guards against reintroducing per-color width behavior. A perceptual
+    // contrast-compensation was tried and reverted here (2026-08-06): the
+    // owner's "purple draws thinner" report turned out intermittent —
+    // absent on a later launch — so it cannot be an always-on optical
+    // effect, and painted width must stay identical across colors. See
+    // the note on kPaperReferenceColor in stroke_painter.dart.
+    test('size passes through unchanged at scale >= 1', () {
       expect(effectiveStrokeSize(3.0, 1.0), 3.0);
       expect(effectiveStrokeSize(3.0, 0.5), 3.0);
+    });
+
+    test('floors so painted width never drops below the minimum', () {
+      expect(effectiveStrokeSize(0.5, 0.1) * 0.1,
+          closeTo(kMinPaintedStrokeWidth, 1e-9));
     });
   });
 
