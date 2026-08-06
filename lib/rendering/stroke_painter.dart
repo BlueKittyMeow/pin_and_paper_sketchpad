@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:perfect_freehand/perfect_freehand.dart' as pf;
@@ -16,14 +17,118 @@ import '../models/stroke.dart';
 /// drawing replayed on a 220x140 card, or further shrunk by desk zoom).
 const double kMinPaintedStrokeWidth = 0.75;
 
+/// Reference "paper" tone for two rendering decisions below — see
+/// [resolveStrokeColor] and [perceptualWidthMultiplier]. Matches
+/// `AppTheme.creamPaper` / the toolbar's cream chrome in the host app,
+/// but the sketchpad module doesn't depend on the app's theme, so it's
+/// re-declared here as the module's own constant.
+const Color kPaperReferenceColor = Color(0xFFF5F1E8);
+
 /// Capture-space stroke size floored so that after multiplying by
 /// [scale] (capture -> painted) the painted width is at least
-/// [kMinPaintedStrokeWidth]. At scale >= 1 normal sizes pass through
-/// untouched.
-double effectiveStrokeSize(double size, double scale) {
-  if (scale <= 0) return size;
+/// [kMinPaintedStrokeWidth], and boosted for low-contrast [color]s (see
+/// [perceptualWidthMultiplier]). At scale >= 1 with a high-contrast
+/// color, normal sizes pass through untouched.
+double effectiveStrokeSize(double size, double scale, {Color? color}) {
+  final boosted =
+      color == null ? size : size * perceptualWidthMultiplier(color);
+  if (scale <= 0) return boosted;
   final floor = kMinPaintedStrokeWidth / scale;
-  return size < floor ? floor : size;
+  return boosted < floor ? floor : boosted;
+}
+
+// -- Perceptual width compensation (owner bug report, 2026-08-06) ----------
+//
+// Reported as "in ink mode, the purple marker draws thinner than the other
+// marker colors." There is no per-color size/opacity field anywhere in the
+// stroke pipeline — every color tessellates through the identical
+// perfect_freehand geometry at the identical StrokeOptions.size — so this
+// was never a data/config discrepancy between colors. It's optical: the
+// palette's muted-lavender ("purple") swatch has low luminance contrast
+// against a light paper tone (~2.7:1 WCAG contrast against
+// [kPaperReferenceColor], versus ~12:1 for the near-black ink swatch), and
+// low-contrast edges read as fainter and narrower to the eye even though
+// the painted geometry is pixel-identical in width.
+//
+// Rather than special-case the one hex value (which would silently stop
+// working the moment the palette changes), this compensates ANY stroke
+// color by how little contrast it has against the paper — purple included,
+// generically, and any future palette addition that's just as light.
+
+/// Contrast ratio at/above which a color "reads solid" and gets no width
+/// boost. WCAG AA's text-contrast threshold, reused here as a convenient,
+/// already-standard cutoff rather than inventing a new one.
+const double _kContrastReadsSolid = 4.5;
+
+/// Contrast ratio at/below which the boost saturates at [_kMaxWidthBoost].
+/// Below this a color is so close to the paper it's barely visible at any
+/// width — further boosting stops helping and just distorts the line.
+const double _kContrastFloor = 1.4;
+
+/// Maximum width multiplier applied at worst-case (lowest) contrast.
+const double _kMaxWidthBoost = 0.35;
+
+double _contrastRatio(Color a, Color b) {
+  final la = a.computeLuminance();
+  final lb = b.computeLuminance();
+  final lighter = math.max(la, lb);
+  final darker = math.min(la, lb);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+/// Width multiplier (always >= 1.0) that compensates [strokeColor]'s
+/// apparent thinness against [kPaperReferenceColor]. 1.0 (no change) at or
+/// above [_kContrastReadsSolid] contrast; scales up linearly to
+/// `1 + _kMaxWidthBoost` as contrast falls toward [_kContrastFloor].
+double perceptualWidthMultiplier(Color strokeColor) {
+  final contrast = _contrastRatio(strokeColor, kPaperReferenceColor);
+  if (contrast >= _kContrastReadsSolid) return 1.0;
+  final t = ((contrast - _kContrastFloor) /
+          (_kContrastReadsSolid - _kContrastFloor))
+      .clamp(0.0, 1.0);
+  return 1.0 + _kMaxWidthBoost * (1.0 - t);
+}
+
+// -- Non-additive layer compositing (owner decision, 2026-08-06) -----------
+//
+// Previously a layer with BlendMode.multiply (the toolbar's "Blend" switch)
+// composited live against the real canvas — the paper backdrop image AND
+// whatever any other layer had already painted beneath it, in stacking
+// order. That let a multiply touch-up stroke on one layer visually muddy
+// or darken ink already committed on a DIFFERENT layer, fighting attempts
+// to color-match a correction against the original line.
+//
+// Fix: multiply is now precomputed per-stroke against the fixed
+// [kPaperReferenceColor] (see [resolveStrokeColor]) instead of applied as
+// a live canvas blend. The layer is then always composited onto the
+// canvas with plain BlendMode.srcOver (see [paintLayerStack]). A
+// multiply-blend layer's ink still "blends with the paper" — it's
+// darkened/muted exactly as before — but it can never again interact with
+// what's on any other layer, because by the time it reaches the shared
+// canvas its color is already a finished, self-contained RGBA value.
+//
+// This is a pure rendering change: [DrawingLayer.blendMode] is still
+// stored and serialized exactly as before (format v1 is untouched), so
+// existing saved drawings need no migration — they render as
+// multiply-precomputed-against-paper for any layer already saved as
+// BlendMode.multiply, which is the intended fix, not a regression.
+
+/// Resolve the paint color a stroke should actually use: [strokeColor]
+/// unchanged for a normal (srcOver) layer, or [strokeColor] precomputed
+/// (channel-wise) against [kPaperReferenceColor] for a multiply layer.
+/// Centralizing the blend HERE — at paint-color resolution — rather than
+/// leaving it as a canvas-level `saveLayer` blend is what guarantees a
+/// multiply layer's ink blends only with the paper, never with another
+/// layer's strokes. See the section comment above for the "why".
+Color resolveStrokeColor(Color strokeColor, BlendMode layerBlendMode) {
+  if (layerBlendMode != BlendMode.multiply) return strokeColor;
+  const paper = kPaperReferenceColor;
+  return Color.fromARGB(
+    (strokeColor.a * 255).round(),
+    ((strokeColor.r * 255) * (paper.r)).round(),
+    ((strokeColor.g * 255) * (paper.g)).round(),
+    ((strokeColor.b * 255) * (paper.b)).round(),
+  );
 }
 
 /// [bounds] is the capture-space rect used for each layer's `saveLayer`.
@@ -58,27 +163,31 @@ void paintLayerStack(
     final layer = layerStack.layers[i];
     if (!layer.visible) continue;
 
-    // Save canvas state for layer opacity/blend
+    // Save canvas state for layer opacity. No `blendMode` here (defaults
+    // to srcOver): a multiply layer's blend is precomputed per-stroke by
+    // resolveStrokeColor below, not applied as a live canvas blend — see
+    // the "Non-additive layer compositing" note above resolveStrokeColor.
     canvas.saveLayer(
       bounds,
-      Paint()
-        ..color = const Color(0xFFFFFFFF).withValues(alpha: layer.opacity)
-        ..blendMode = layer.blendMode,
+      Paint()..color = const Color(0xFFFFFFFF).withValues(alpha: layer.opacity),
     );
 
     if (bakedLayerPictures != null && i < bakedLayerPictures.length) {
-      // Committed strokes replay from the pre-recorded picture.
+      // Committed strokes replay from the pre-recorded picture (already
+      // baked with resolveStrokeColor applied — see DrawingCanvas._bakeLayer).
       canvas.drawPicture(bakedLayerPictures[i]);
     } else {
       // Draw strokes interleaved — eraser strokes use dstOut to cut
       // holes
       for (final stroke in layer.strokes) {
+        final resolved = resolveStrokeColor(stroke.color, layer.blendMode);
         drawFreehandStroke(
           canvas,
           stroke.points,
           stroke.options,
-          paint: stroke.isEraser ? eraserPaint() : inkPaint(stroke.color),
+          paint: stroke.isEraser ? eraserPaint() : inkPaint(resolved),
           scale: scale,
+          widthReferenceColor: stroke.isEraser ? null : resolved,
         );
       }
     }
@@ -86,13 +195,14 @@ void paintLayerStack(
     // Draw the in-progress stroke inside its own layer
     final isActiveLayer = layer == layerStack.activeLayer;
     if (isActiveLayer && inProgressPoints.isNotEmpty) {
+      final resolved = resolveStrokeColor(inProgressColor, layer.blendMode);
       drawFreehandStroke(
         canvas,
         inProgressPoints,
         inProgressOptions,
-        paint:
-            inProgressIsEraser ? eraserPaint() : inkPaint(inProgressColor),
+        paint: inProgressIsEraser ? eraserPaint() : inkPaint(resolved),
         scale: scale,
+        widthReferenceColor: inProgressIsEraser ? null : resolved,
       );
     }
 
@@ -117,12 +227,19 @@ Paint eraserPaint() => Paint()
 ///
 /// [scale] (capture -> painted) floors the tessellated stroke size so
 /// the painted width never drops below [kMinPaintedStrokeWidth].
+///
+/// [widthReferenceColor], when given, additionally boosts the tessellated
+/// width for low-contrast colors (see [perceptualWidthMultiplier]) — pass
+/// the stroke's resolved paint color for ordinary ink, or leave it null
+/// for eraser strokes (an eraser cuts a hole; it has no "reads thin"
+/// perceptual problem to compensate for).
 void drawFreehandStroke(
   Canvas canvas,
   List<StrokePoint> points,
   StrokeOptions options, {
   required Paint paint,
   double scale = 1.0,
+  Color? widthReferenceColor,
 }) {
   if (points.isEmpty) return;
 
@@ -134,7 +251,7 @@ void drawFreehandStroke(
   final outlinePoints = pf.getStroke(
     pfPoints,
     options: pf.StrokeOptions(
-      size: effectiveStrokeSize(options.size, scale),
+      size: effectiveStrokeSize(options.size, scale, color: widthReferenceColor),
       thinning: options.thinning,
       smoothing: options.smoothing,
       streamline: options.streamline,

@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pin_and_paper_sketchpad/rendering/stroke_painter.dart';
 import 'package:pin_and_paper_sketchpad/sketchpad.dart';
 
 /// A constant-width stroke along [pts] (no thinning/smoothing/streamline
@@ -304,6 +305,94 @@ void main() {
 
     final pixels = await _renderedPixels(tester);
     expect(_alphaAt(pixels, 200, 100, 100), greaterThan(0));
+  });
+
+  group('non-additive layer compositing (owner decision, 2026-08-06)', () {
+    testWidgets(
+        'a multiply-blend layer stacked ABOVE another layer\'s ink no '
+        'longer blends with it — only with the fixed paper reference',
+        (tester) async {
+      // Bottom layer: an opaque bright-green stroke covering the probe
+      // region. Under the OLD live-canvas-blend behavior, a multiply
+      // layer painted on top of this would visibly darken/tint toward
+      // green. Under the fix, the top layer's color is precomputed
+      // against kPaperReferenceColor alone — this stroke's presence (or
+      // absence, or color) must make ZERO difference to the result.
+      final bottom = DrawingLayer(id: 'bottom', name: 'Bottom')
+        ..addStroke(_line(_midlinePts, color: const Color(0xFF00FF00), size: 30));
+      // Top layer: multiply blend, opaque red stroke over the same
+      // pixels.
+      const red = Color(0xFFFF0000);
+      final top = DrawingLayer(
+        id: 'top',
+        name: 'Top',
+        blendMode: BlendMode.multiply,
+      )..addStroke(_line(_midlinePts, color: red, size: 30));
+
+      final stack = LayerStack(layers: [bottom, top], size: const Size(100, 100));
+
+      await tester.pumpWidget(_host(
+        DrawingPreview(layerStack: stack, size: const Size(100, 100)),
+      ));
+
+      final image = await tester.runAsync(() async {
+        final boundary =
+            tester.renderObject<RenderRepaintBoundary>(_previewBoundary);
+        return boundary.toImage();
+      });
+      final bytes = await tester.runAsync(
+          () => image!.toByteData(format: ui.ImageByteFormat.rawRgba));
+      image!.dispose();
+
+      int channelAt(int x, int y, int channel) =>
+          bytes!.getUint8((y * 100 + x) * 4 + channel);
+
+      // Center of the probe region: fully covered by both strokes.
+      const x = 50, y = 50;
+      final resolved = resolveStrokeColor(red, BlendMode.multiply);
+      expect(channelAt(x, y, 0), (resolved.r * 255).round()); // R
+      expect(channelAt(x, y, 1), (resolved.g * 255).round()); // G
+      expect(channelAt(x, y, 2), (resolved.b * 255).round()); // B
+      // In particular: NOT green-tinted (the old, additive behavior
+      // would have driven the green channel up from whatever's beneath
+      // showing through the multiply).
+      expect(channelAt(x, y, 1), lessThan(80));
+    });
+
+    testWidgets(
+        'an existing saved drawing (format v1, blendMode "multiply") '
+        'still loads and renders without throwing — no migration needed',
+        (tester) async {
+      // Hand-built JSON matching what a pre-fix save would have produced:
+      // format v1 doesn't encode HOW a blend mode is applied, only which
+      // one — so old rows are forward-compatible with the new
+      // compositing by construction.
+      final json = jsonEncode({
+        'v': 1,
+        'size': [100.0, 100.0],
+        'activeLayer': 0,
+        'layers': [
+          {
+            'id': 'color',
+            'name': 'Color',
+            'visible': true,
+            'opacity': 1.0,
+            'blendMode': 'multiply',
+            'defaultOptions': StrokeOptions.watercolor.toJson(),
+            'strokes': [
+              _line(_midlinePts, color: const Color(0xFFC75B4A)).toJson(),
+            ],
+          },
+        ],
+      });
+
+      await tester.pumpWidget(_host(
+        DrawingPreview.fromJson(json, size: const Size(100, 100)),
+      ));
+
+      final pixels = await _renderedPixels(tester);
+      expect(_alphaAt(pixels, 100, 50, 50), greaterThan(0));
+    });
   });
 
   test('fromJson factory rejects unknown versions', () {

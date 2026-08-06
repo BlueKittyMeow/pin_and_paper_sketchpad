@@ -75,11 +75,16 @@ class DrawingToolbar extends StatelessWidget {
           // Layer controls
           _buildLayerRow(),
           const SizedBox(height: 8),
-          
+
           // Color palette
           _buildColorRow(),
           const SizedBox(height: 8),
-          
+
+          // Stroke size (owner 2026-08-06: every implement gets a size
+          // control + reset-to-default, not just some).
+          _buildSizeRow(context),
+          const SizedBox(height: 8),
+
           // Tool presets and actions
           _buildToolRow(),
         ],
@@ -91,7 +96,7 @@ class DrawingToolbar extends StatelessWidget {
     return Row(
       children: [
         const Text(
-          'Visibility: ',
+          'Layer: ',
           style: TextStyle(
             fontSize: 12,
             fontWeight: FontWeight.w500,
@@ -100,52 +105,10 @@ class DrawingToolbar extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         // Display order: Sketch(1), Ink(2), Brush/Color(0)
-        ...[1, 2, 0].map((index) {
-          final layer = layerStack.layers[index];
-          final isActive = index == layerStack.activeLayerIndex;
-          
-          return Padding(
-            padding: const EdgeInsets.only(right: 4),
-            child: GestureDetector(
-              onTap: () => onVisibilityToggled(index),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                decoration: BoxDecoration(
-                  color: layer.visible
-                      ? (isActive ? const Color(0xFF8B7355) : Colors.white)
-                      : Colors.grey.shade300,
-                  borderRadius: BorderRadius.circular(4),
-                  border: Border.all(
-                    color: const Color(0xFF8B7355),
-                    width: isActive ? 2 : 1,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      layer.visible ? Icons.visibility : Icons.visibility_off,
-                      size: 16,
-                      color: isActive && layer.visible
-                          ? Colors.white
-                          : const Color(0xFF4A3F35),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      layer.name,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isActive && layer.visible
-                            ? Colors.white
-                            : const Color(0xFF4A3F35),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          );
-        }),
+        ...[1, 2, 0].map((index) => Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: _buildLayerChipGroup(index),
+            )),
         const Spacer(),
         // Blend mode toggle
         Row(
@@ -162,6 +125,73 @@ class DrawingToolbar extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+
+  /// One layer's go-to-layer chip + its own visibility eyeball, tapped
+  /// independently (owner 2026-08-06): tapping the name switches to that
+  /// layer via [onLayerSelected]; tapping the eye toggles that layer's
+  /// visibility via [onVisibilityToggled] — previously the whole element
+  /// was ONE tap target that only toggled visibility, with no way to
+  /// select a layer from this row at all. A light-opacity ring around
+  /// both pieces together is the "these two belong to each other"
+  /// grouping cue, so ownership reads at a glance even though they're
+  /// separately tappable.
+  Widget _buildLayerChipGroup(int index) {
+    final layer = layerStack.layers[index];
+    final isActive = index == layerStack.activeLayerIndex;
+    const wood = Color(0xFF8B7355);
+    const ink = Color(0xFF4A3F35);
+
+    return Container(
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(6),
+        // The "light-opacity ring" binding chip + eyeball as one unit.
+        border: Border.all(color: wood.withValues(alpha: 0.35), width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Go-to-layer chip.
+          GestureDetector(
+            onTap: () => onLayerSelected(index),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: isActive ? wood : Colors.white,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                layer.name,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: isActive ? Colors.white : ink,
+                  fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 2),
+          // Visibility eyeball — its own tap target, right next to the
+          // chip it owns.
+          GestureDetector(
+            onTap: () => onVisibilityToggled(index),
+            child: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: layer.visible ? Colors.white : Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Icon(
+                layer.visible ? Icons.visibility : Icons.visibility_off,
+                size: 16,
+                color: ink,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -205,6 +235,79 @@ class DrawingToolbar extends StatelessWidget {
             ),
           );
         }),
+      ],
+    );
+  }
+
+  /// Practical size range shared by every implement (sketch/ink/watercolor
+  /// presets run 2.0-16.0; the eraser reuses whatever tool size was active
+  /// when toggled — see [_buildToolRow]'s eraser button). Not the
+  /// SKETCHPAD_SPEC's future 1-100px alpha-mask eraser range: today's
+  /// eraser is literally an ink stroke that cuts a hole (dstOut), so it
+  /// shares ink's size semantics, not a separate diameter concept.
+  static const double _minSize = 1.0;
+  static const double _maxSize = 40.0;
+
+  /// Stroke size control for whichever implement is currently active
+  /// (owner 2026-08-06: every implement, not just some) plus a
+  /// reset-to-tool-default affordance. "Tool default" is the active
+  /// layer's own [DrawingLayer.defaultOptions.size] — the size baked into
+  /// its Sketch/Ink/Color preset — regardless of whether the eraser is
+  /// currently toggled on, since the eraser isn't a separate tool with
+  /// its own default; it's a modifier on top of whatever tool/size is
+  /// current.
+  Widget _buildSizeRow(BuildContext context) {
+    final size = currentOptions.size;
+    final defaultSize = layerStack.activeLayer.defaultOptions.size;
+    final atDefault = (size - defaultSize).abs() < 0.05;
+
+    return Row(
+      children: [
+        const Text(
+          'Size: ',
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: Color(0xFF4A3F35),
+          ),
+        ),
+        SizedBox(
+          width: 30,
+          child: Text(
+            size.toStringAsFixed(1),
+            style: const TextStyle(fontSize: 12, color: Color(0xFF4A3F35)),
+          ),
+        ),
+        Expanded(
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 3,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+            ),
+            child: Slider(
+              value: size.clamp(_minSize, _maxSize),
+              min: _minSize,
+              max: _maxSize,
+              activeColor: const Color(0xFF8B7355),
+              inactiveColor: const Color(0xFF8B7355).withValues(alpha: 0.25),
+              onChanged: (v) =>
+                  onOptionsChanged(currentOptions.copyWith(size: v)),
+            ),
+          ),
+        ),
+        IconButton(
+          onPressed: atDefault
+              ? null
+              : () => onOptionsChanged(
+                  currentOptions.copyWith(size: defaultSize)),
+          icon: const Icon(Icons.replay, size: 18),
+          tooltip: atDefault
+              ? 'At tool default (${defaultSize.toStringAsFixed(1)})'
+              : 'Reset to tool default (${defaultSize.toStringAsFixed(1)})',
+          color: const Color(0xFF4A3F35),
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+        ),
       ],
     );
   }

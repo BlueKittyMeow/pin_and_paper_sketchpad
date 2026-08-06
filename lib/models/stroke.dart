@@ -154,6 +154,28 @@ class StrokeOptions {
     taperEnd: 0.2,       // Natural lift-off
   );
 
+  /// Returns a copy with the given fields replaced. Used by the toolbar's
+  /// size slider/reset control to adjust just [size] while leaving the
+  /// active tool's other tuning (thinning, smoothing, taper...) alone.
+  StrokeOptions copyWith({
+    double? size,
+    double? thinning,
+    double? smoothing,
+    double? streamline,
+    double? taperStart,
+    double? taperEnd,
+    bool? simulatePressure,
+  }) =>
+      StrokeOptions(
+        size: size ?? this.size,
+        thinning: thinning ?? this.thinning,
+        smoothing: smoothing ?? this.smoothing,
+        streamline: streamline ?? this.streamline,
+        taperStart: taperStart ?? this.taperStart,
+        taperEnd: taperEnd ?? this.taperEnd,
+        simulatePressure: simulatePressure ?? this.simulatePressure,
+      );
+
   Map<String, dynamic> toJson() => {
         'size': size,
         'thinning': thinning,

@@ -263,7 +263,12 @@ class LayerStack {
     }
   }
 
-  /// Toggle between multiply blend (paper texture shows) and srcOver (opaque)
+  /// Toggle between multiply blend (muted/darkened, "on the paper" look)
+  /// and srcOver (opaque, flat color). Multiply is precomputed per-stroke
+  /// against a fixed reference paper tone at paint time — see
+  /// `resolveStrokeColor` in `rendering/stroke_painter.dart` — rather than
+  /// blended live against whatever else is on the canvas, so it never
+  /// interacts with another layer's strokes (owner decision, 2026-08-06).
   void toggleBlendMode(int index) {
     if (index >= 0 && index < layers.length) {
       final layer = layers[index];

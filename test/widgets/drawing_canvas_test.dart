@@ -152,6 +152,94 @@ void main() {
     expect(points.map((p) => p.y), [190.0, 210.0]);
   });
 
+  group('DrawingCanvasController (pinch-to-zoom support, 2026-08-06)', () {
+    testWidgets(
+        'cancelActiveStroke discards the wet stroke without touching the '
+        'raw pointer, so further moves for that pointer are ignored',
+        (tester) async {
+      final stack = LayerStack();
+      final controller = DrawingCanvasController();
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 300,
+                height: 300,
+                child: DrawingCanvas(
+                  layerStack: stack,
+                  currentColor: const Color(0xFF2D2D2D),
+                  strokeOptions: StrokeOptions.ink,
+                  controller: controller,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      final center = tester.getCenter(find.byType(DrawingCanvas));
+
+      final gesture = await tester.createGesture();
+      await gesture.down(center);
+      await gesture.moveBy(const Offset(10, 0));
+      await tester.pump();
+
+      // A host (e.g. a pinch-zoom gesture starting) discards the wet
+      // stroke via the controller — NOT GestureBinding.cancelPointer.
+      controller.cancelActiveStroke();
+      await tester.pump();
+
+      // The pointer is still "live" from Flutter's perspective (never
+      // cancelled at the binding level) — further moves for it must be
+      // silently ignored by the canvas, not accumulated into a new
+      // stroke.
+      await gesture.moveBy(const Offset(50, 50));
+      await tester.pump();
+      await gesture.up();
+      await tester.pump();
+
+      expect(stack.activeLayer.strokes, isEmpty);
+
+      // The canvas recovers: a fresh stroke still works afterward.
+      final next = await tester.createGesture();
+      await next.down(center);
+      await next.moveBy(const Offset(15, 0));
+      await next.up();
+      await tester.pump();
+      expect(stack.activeLayer.strokes, hasLength(1));
+    });
+
+    testWidgets('a controller with no in-progress stroke is a harmless '
+        'no-op', (tester) async {
+      final stack = LayerStack();
+      final controller = DrawingCanvasController();
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 300,
+                height: 300,
+                child: DrawingCanvas(
+                  layerStack: stack,
+                  currentColor: const Color(0xFF2D2D2D),
+                  strokeOptions: StrokeOptions.ink,
+                  controller: controller,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(() => controller.cancelActiveStroke(), returnsNormally);
+      await tester.pump();
+      expect(stack.activeLayer.strokes, isEmpty);
+    });
+  });
+
   testWidgets('onPointerCancel discards the in-progress stroke',
       (tester) async {
     final stack = LayerStack();

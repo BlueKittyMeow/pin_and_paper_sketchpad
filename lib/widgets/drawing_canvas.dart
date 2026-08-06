@@ -6,6 +6,32 @@ import '../models/stroke.dart';
 import '../models/layer.dart';
 import '../rendering/stroke_painter.dart';
 
+/// Imperative handle a host app can use to tell a live [DrawingCanvas] to
+/// discard whatever stroke is currently in progress, without going
+/// through Flutter's raw pointer-cancellation machinery
+/// (`GestureBinding.cancelPointer`).
+///
+/// Added for pinch-to-zoom (owner request, 2026-08-06): a host that wraps
+/// the canvas in some zoom/pan gesture recognizer (e.g. a
+/// `GestureDetector`'s scale gesture, or `InteractiveViewer`) needs to
+/// make sure the first finger's in-progress stroke doesn't silently keep
+/// accumulating (and eventually commit as ink) once a second finger joins
+/// and turns the gesture into a zoom. Calling `GestureBinding.cancelPointer`
+/// on that first finger would work for discarding the stroke, but it ALSO
+/// stops the host's zoom recognizer from tracking that same pointer —
+/// breaking the pinch mid-gesture (verified the hard way: the main app's
+/// own drawing-editor screen hit exactly this, see
+/// `pin-and-paper/lib/screens/drawing_editor_screen.dart`'s
+/// `_handlePolicyPointerDown` doc comment). This controller lets the host
+/// discard the wet stroke on the sketchpad side only, leaving the raw
+/// pointer (and whatever else is listening to it, like a zoom gesture
+/// recognizer) completely alone.
+class DrawingCanvasController extends ChangeNotifier {
+  /// Discard the canvas's in-progress stroke, if any. A no-op if nothing
+  /// is currently being drawn.
+  void cancelActiveStroke() => notifyListeners();
+}
+
 /// The main drawing canvas widget
 class DrawingCanvas extends StatefulWidget {
   final LayerStack layerStack;
@@ -16,6 +42,11 @@ class DrawingCanvas extends StatefulWidget {
   final ImageProvider? backgroundImage;
   final bool debugPressure; // Show pressure values for testing
 
+  /// Optional imperative handle — see [DrawingCanvasController]. Null by
+  /// default (no behavior change for hosts that don't need it, e.g. the
+  /// module's own example app).
+  final DrawingCanvasController? controller;
+
   const DrawingCanvas({
     super.key,
     required this.layerStack,
@@ -25,6 +56,7 @@ class DrawingCanvas extends StatefulWidget {
     this.onStrokeComplete,
     this.backgroundImage,
     this.debugPressure = false,
+    this.controller,
   });
 
   @override
@@ -52,19 +84,30 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   void initState() {
     super.initState();
     _syncBakedPictures();
+    widget.controller?.addListener(_onControllerCancel);
   }
 
   @override
   void didUpdateWidget(DrawingCanvas oldWidget) {
     super.didUpdateWidget(oldWidget);
     _syncBakedPictures();
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller?.removeListener(_onControllerCancel);
+      widget.controller?.addListener(_onControllerCancel);
+    }
   }
 
   @override
   void dispose() {
+    widget.controller?.removeListener(_onControllerCancel);
     _disposeBakedPictures();
     super.dispose();
   }
+
+  /// [DrawingCanvasController.cancelActiveStroke] fired — discard the wet
+  /// stroke exactly like a pointer cancel would, but without touching the
+  /// raw pointer itself (see [DrawingCanvasController]'s doc comment).
+  void _onControllerCancel() => _discardCurrentStroke();
 
   void _disposeBakedPictures() {
     for (final picture in _bakedLayerPictures) {
@@ -95,11 +138,17 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     for (final stroke in layer.strokes) {
+      // resolveStrokeColor bakes the layer's multiply-with-paper blend (if
+      // any) into the stroke's own color now, once — see the "Non-additive
+      // layer compositing" note in stroke_painter.dart. The baked picture
+      // is then always composited with plain srcOver.
+      final resolved = resolveStrokeColor(stroke.color, layer.blendMode);
       drawFreehandStroke(
         canvas,
         stroke.points,
         stroke.options,
-        paint: stroke.isEraser ? eraserPaint() : inkPaint(stroke.color),
+        paint: stroke.isEraser ? eraserPaint() : inkPaint(resolved),
+        widthReferenceColor: stroke.isEraser ? null : resolved,
       );
     }
     return recorder.endRecording();
