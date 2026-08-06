@@ -140,6 +140,20 @@ class DrawingToolbar extends StatelessWidget {
   /// both pieces together is the "these two belong to each other"
   /// grouping cue, so ownership reads at a glance even though they're
   /// separately tappable.
+  /// Display labels for the standard layers (owner rename 2026-08-06:
+  /// physical implement names — "Color" collided with the color palette
+  /// concept and never stuck). Serialized layer names are untouched, so
+  /// old drawings load unchanged and still get the new labels; a custom
+  /// layer name passes through as-is.
+  static const _displayNames = {
+    'Sketch': 'Pencil',
+    'Ink': 'Pen',
+    'Color': 'Marker',
+  };
+
+  static String _displayName(String layerName) =>
+      _displayNames[layerName] ?? layerName;
+
   Widget _buildLayerChipGroup(int index) {
     final layer = layerStack.layers[index];
     final isActive = index == layerStack.activeLayerIndex;
@@ -171,7 +185,7 @@ class DrawingToolbar extends StatelessWidget {
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
-                layer.name,
+                _displayName(layer.name),
                 style: TextStyle(
                   fontSize: 12,
                   color: isActive ? Colors.white : ink,

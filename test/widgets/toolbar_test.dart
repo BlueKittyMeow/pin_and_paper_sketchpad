@@ -47,10 +47,11 @@ void main() {
         onOptionsChanged: (_) {},
       ));
 
-      // The layer chip is the ONLY "Sketch" in the toolbar now — the old
+      // The layer chip is the only place with implement names now (the
       // duplicate preset-button row was removed in the owner's
-      // chip+eyeball unification (2026-08-06).
-      await tester.tap(find.text('Sketch'));
+      // chip+eyeball unification, 2026-08-06). Displayed as "Pencil" per
+      // the implement rename; the layer's serialized name stays 'Sketch'.
+      await tester.tap(find.text('Pencil'));
       await tester.pump();
 
       expect(selected, 1); // Sketch is layers[1] in the default stack
