@@ -268,14 +268,28 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   ///
   /// A real stylus reports meaningful pressure — trust it (including an
   /// honest 1.0 at max press; the old heuristic snapped that to 0.5).
-  /// Touch/mouse pressure readings are unreliable, so use a neutral 0.5.
+  ///
+  /// FINGER pressure is trusted too (owner decision 2026-08-06): phone
+  /// digitizers report real contact pressure and the resulting organic
+  /// width variation is wanted — the earlier hard 0.5 pin threw the
+  /// marker's pressure feel away along with the noise. The one recorded
+  /// pathological case (a stroke collapsing to threads, "purple thinner"
+  /// video 2026-08-05) was diagnosed as one-off reading weirdness —
+  /// owner's leading theory: the case magnet skewing the digitizer — and
+  /// the owner explicitly chose NO artificial floor; if it recurs, see
+  /// the protocol note in pin-and-paper docs/FEATURE_REQUESTS.md.
+  ///
+  /// Mouse/trackpad report nothing meaningful, so they get a neutral
+  /// 0.5; a non-positive reading on any device means "no data", not
+  /// "zero press", and falls back the same way.
   double _normalizePressure(PointerEvent event) {
-    if (_isStylus(event.kind)) {
+    if (_isStylus(event.kind) || event.kind == PointerDeviceKind.touch) {
       final range = event.pressureMax - event.pressureMin;
-      if (range > 0) {
-        return ((event.pressure - event.pressureMin) / range).clamp(0.0, 1.0);
-      }
-      return event.pressure.clamp(0.0, 1.0);
+      final p = range > 0
+          ? (event.pressure - event.pressureMin) / range
+          : event.pressure;
+      if (p <= 0) return 0.5;
+      return p.clamp(0.0, 1.0);
     }
     return 0.5;
   }

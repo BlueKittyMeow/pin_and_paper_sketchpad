@@ -286,16 +286,38 @@ void main() {
     }
   });
 
-  testWidgets('touch input gets the neutral 0.5 pressure default',
+  testWidgets('touch pressure is trusted, not pinned to 0.5 '
+      '(owner decision 2026-08-06: the marker keeps its pressure feel)',
       (tester) async {
     final stack = LayerStack();
     await tester.pumpWidget(_buildApp(stack));
     final center = tester.getCenter(find.byType(DrawingCanvas));
 
+    // The test binding's touch events report an honest 1.0 (degenerate
+    // min==max range, so the raw reading passes through) — under the old
+    // hard pin these all came back 0.5.
     final touch = await tester.createGesture();
     await touch.down(center);
     await touch.moveBy(const Offset(10, 0));
     await touch.up();
+    await tester.pump();
+
+    final points = stack.activeLayer.strokes.single.points;
+    for (final p in points) {
+      expect(p.pressure, 1.0);
+    }
+  });
+
+  testWidgets('mouse input still gets the neutral 0.5 (no meaningful '
+      'pressure to trust)', (tester) async {
+    final stack = LayerStack();
+    await tester.pumpWidget(_buildApp(stack));
+    final center = tester.getCenter(find.byType(DrawingCanvas));
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.down(center);
+    await mouse.moveBy(const Offset(10, 0));
+    await mouse.up();
     await tester.pump();
 
     final points = stack.activeLayer.strokes.single.points;
