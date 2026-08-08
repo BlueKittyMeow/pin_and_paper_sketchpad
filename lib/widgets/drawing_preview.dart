@@ -25,8 +25,9 @@ import '../rendering/stroke_painter.dart';
 /// picture stays crisp under further transforms (e.g. desk zoom).
 ///
 /// Content-change detection: re-records when the [layerStack] instance,
-/// its [LayerStack.revision], or the target [size] changes. Mutations
-/// made behind the stack's back must call [LayerStack.markChanged].
+/// its [LayerStack.revision], the target [size], or [backdropImage]
+/// changes. Mutations made behind the stack's back must call
+/// [LayerStack.markChanged].
 ///
 /// Lifecycle: the picture is recorded in [State.initState] /
 /// [State.didUpdateWidget] and disposed in [State.dispose] — never
@@ -42,10 +43,25 @@ class DrawingPreview extends StatefulWidget {
   /// Target render size (e.g. the 220x140 logical card face).
   final Size size;
 
+  /// Raster snapshot of whatever real content sits beneath the drawing
+  /// (e.g. the card back), in the drawing's own capture-space coordinates
+  /// ([LayerStack.size] — NOT [size]; it is stretched to fit via
+  /// `drawImageRect`, so any resolution works). When supplied, a
+  /// BlendMode.multiply layer composites with a real multiply blend
+  /// against it instead of the flat-paper precompute — see the
+  /// "Backdrop-aware multiply compositing" note in
+  /// `rendering/stroke_painter.dart`. Null (the default) preserves prior
+  /// behavior for hosts that haven't been updated to supply one (owner
+  /// report 2026-08-06, fixed 2026-08-07) — e.g. the desk's card overlay
+  /// (`canvas_screen.dart`) still needs its own follow-up to snapshot the
+  /// card back and pass it here for full on-card consistency.
+  final ui.Image? backdropImage;
+
   const DrawingPreview({
     super.key,
     required this.layerStack,
     required this.size,
+    this.backdropImage,
   });
 
   /// Convenience: build a preview straight from serialized format-v1
@@ -57,12 +73,14 @@ class DrawingPreview extends StatefulWidget {
     String json, {
     Key? key,
     required Size size,
+    ui.Image? backdropImage,
   }) =>
       DrawingPreview(
         key: key,
         layerStack:
             LayerStack.fromJson(jsonDecode(json) as Map<String, dynamic>),
         size: size,
+        backdropImage: backdropImage,
       );
 
   /// Scale factors applied to capture-space strokes to fill [target].
@@ -79,6 +97,7 @@ class _DrawingPreviewState extends State<DrawingPreview> {
   LayerStack? _recordedStack;
   int _recordedRevision = -1;
   Size? _recordedSize;
+  ui.Image? _recordedBackdropImage;
 
   bool get _hasVisibleContent => widget.layerStack.visibleLayers
       .any((l) => l.strokes.any((s) => !s.isEraser && s.points.isNotEmpty));
@@ -101,7 +120,8 @@ class _DrawingPreviewState extends State<DrawingPreview> {
     final stack = widget.layerStack;
     if (identical(_recordedStack, stack) &&
         _recordedRevision == stack.revision &&
-        _recordedSize == widget.size) {
+        _recordedSize == widget.size &&
+        identical(_recordedBackdropImage, widget.backdropImage)) {
       return; // Content unchanged — reuse the recorded picture.
     }
     _picture?.dispose();
@@ -111,6 +131,7 @@ class _DrawingPreviewState extends State<DrawingPreview> {
     _recordedStack = stack;
     _recordedRevision = stack.revision;
     _recordedSize = widget.size;
+    _recordedBackdropImage = widget.backdropImage;
   }
 
   ui.Picture _record(LayerStack stack) {
@@ -125,6 +146,7 @@ class _DrawingPreviewState extends State<DrawingPreview> {
       Rect.fromLTWH(0, 0, capture.width, capture.height),
       // Worst-case shrink axis governs the min painted stroke width.
       scale: math.min(scale.dx, scale.dy),
+      backdropImage: widget.backdropImage,
     );
     return recorder.endRecording();
   }

@@ -47,6 +47,17 @@ class DrawingCanvas extends StatefulWidget {
   /// module's own example app).
   final DrawingCanvasController? controller;
 
+  /// Raster snapshot of whatever real content sits beneath the whole
+  /// drawing (e.g. the card face in the app's drawing editor), in this
+  /// canvas's own capture-space coordinates. When supplied, a
+  /// BlendMode.multiply layer ("Blend"/Marker) composites with a real
+  /// multiply blend against it instead of the flat-paper precompute —
+  /// see the "Backdrop-aware multiply compositing" note in
+  /// `rendering/stroke_painter.dart`. Null (the default) preserves prior
+  /// behavior for hosts that haven't been updated (owner report
+  /// 2026-08-06, fixed 2026-08-07).
+  final ui.Image? backdropImage;
+
   const DrawingCanvas({
     super.key,
     required this.layerStack,
@@ -57,6 +68,7 @@ class DrawingCanvas extends StatefulWidget {
     this.backgroundImage,
     this.debugPressure = false,
     this.controller,
+    this.backdropImage,
   });
 
   @override
@@ -79,6 +91,13 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   List<ui.Picture> _bakedLayerPictures = const [];
   LayerStack? _bakedStack;
   int _bakedRevision = -1;
+
+  /// The [DrawingCanvas.backdropImage] baked pictures were built against
+  /// — a multiply layer's picture holds raw stroke colors when this is
+  /// non-null (resolved live against the backdrop each paint) or
+  /// flat-paper-precomputed colors when null, so a change here forces a
+  /// re-bake even though the stack's own content/revision didn't change.
+  ui.Image? _bakedBackdropImage;
 
   @override
   void initState() {
@@ -119,7 +138,9 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   /// Re-bake committed strokes if the stack's content changed.
   void _syncBakedPictures() {
     final stack = widget.layerStack;
-    if (identical(_bakedStack, stack) && _bakedRevision == stack.revision) {
+    if (identical(_bakedStack, stack) &&
+        _bakedRevision == stack.revision &&
+        identical(_bakedBackdropImage, widget.backdropImage)) {
       return; // Content unchanged — keep the baked pictures.
     }
     _disposeBakedPictures();
@@ -128,6 +149,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     ];
     _bakedStack = stack;
     _bakedRevision = stack.revision;
+    _bakedBackdropImage = widget.backdropImage;
   }
 
   /// Record one layer's committed strokes (interleaved ink + eraser,
@@ -137,12 +159,20 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   ui.Picture _bakeLayer(DrawingLayer layer) {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
+    // A multiply layer's blend is resolved live, per-pixel, against
+    // widget.backdropImage at paint time (see paintLayerStack's
+    // _paintMultiplyAgainstBackdrop) whenever one is available — that
+    // needs the stroke's TRUE color baked in, not a precomputed one.
+    // Without a backdrop image, fall back to baking the 2026-08-06
+    // flat-paper precompute exactly as before (resolveStrokeColor), kept
+    // in sync with paintLayerStack's own `backdropImage`-gated choice via
+    // _bakedBackdropImage above.
+    final useBackdrop =
+        layer.blendMode == BlendMode.multiply && widget.backdropImage != null;
     for (final stroke in layer.strokes) {
-      // resolveStrokeColor bakes the layer's multiply-with-paper blend (if
-      // any) into the stroke's own color now, once — see the "Non-additive
-      // layer compositing" note in stroke_painter.dart. The baked picture
-      // is then always composited with plain srcOver.
-      final resolved = resolveStrokeColor(stroke.color, layer.blendMode);
+      final resolved = useBackdrop
+          ? stroke.color
+          : resolveStrokeColor(stroke.color, layer.blendMode);
       drawFreehandStroke(
         canvas,
         stroke.points,
@@ -354,6 +384,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                 currentColor: widget.currentColor,
                 strokeOptions: widget.strokeOptions,
                 isEraserActive: widget.isEraserActive,
+                backdropImage: widget.backdropImage,
               ),
               isComplex: true,
               willChange: true,
@@ -403,6 +434,7 @@ class _DrawingPainter extends CustomPainter {
   final Color currentColor;
   final StrokeOptions strokeOptions;
   final bool isEraserActive;
+  final ui.Image? backdropImage;
 
   _DrawingPainter({
     required this.layerStack,
@@ -412,6 +444,7 @@ class _DrawingPainter extends CustomPainter {
     required this.currentColor,
     required this.strokeOptions,
     this.isEraserActive = false,
+    this.backdropImage,
   }) : currentPointCount = currentPoints.length;
 
   @override
@@ -430,6 +463,7 @@ class _DrawingPainter extends CustomPainter {
           bakedLayerPictures.length == layerStack.layers.length
               ? bakedLayerPictures
               : null,
+      backdropImage: backdropImage,
     );
   }
 
@@ -442,5 +476,6 @@ class _DrawingPainter extends CustomPainter {
       oldDelegate.currentPointCount != currentPointCount ||
       oldDelegate.currentColor != currentColor ||
       oldDelegate.strokeOptions != strokeOptions ||
-      oldDelegate.isEraserActive != isEraserActive;
+      oldDelegate.isEraserActive != isEraserActive ||
+      !identical(oldDelegate.backdropImage, backdropImage);
 }

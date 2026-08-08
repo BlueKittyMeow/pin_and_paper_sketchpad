@@ -59,6 +59,34 @@ Future<ByteData> _renderedPixels(WidgetTester tester) async {
 int _alphaAt(ByteData data, int width, int x, int y) =>
     data.getUint8((y * width + x) * 4 + 3);
 
+int _channelAt(ByteData data, int width, int x, int y, int channel) =>
+    data.getUint8((y * width + x) * 4 + channel);
+
+/// A flat-color `ui.Image`, [w]x[h], for use as a [DrawingPreview.backdropImage]
+/// probe — a real backdrop the multiply math can be checked against
+/// without depending on any actual card-rendering package.
+Future<ui.Image> _solidColorImage(Color color, int w, int h) async {
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder);
+  canvas.drawRect(
+    Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()),
+    Paint()..color = color,
+  );
+  return recorder.endRecording().toImage(w, h);
+}
+
+/// Reference channel-wise multiply, independent of [resolveStrokeColor]
+/// (which is hardcoded to [kPaperReferenceColor]) — used to check
+/// backdrop-aware compositing against an arbitrary backdrop color.
+int _multiplyChannel(Color src, Color backdrop, int channel) {
+  double component(Color c) => switch (channel) {
+        0 => c.r,
+        1 => c.g,
+        _ => c.b,
+      };
+  return (component(src) * component(backdrop) * 255).round();
+}
+
 void main() {
   group('scale math', () {
     test('uniform 2x', () {
@@ -392,6 +420,141 @@ void main() {
 
       final pixels = await _renderedPixels(tester);
       expect(_alphaAt(pixels, 100, 50, 50), greaterThan(0));
+    });
+  });
+
+  group('backdrop-aware multiply compositing (owner report 2026-08-06, '
+      'fixed 2026-08-07)', () {
+    testWidgets(
+        'a multiply layer composites with a real multiply blend against a '
+        'supplied backdropImage, not the flat paper reference',
+        (tester) async {
+      const red = Color(0xFFFF0000);
+      // Distinct from kPaperReferenceColor, so a passing result proves the
+      // real backdrop was used, not the 2026-08-06 flat-paper precompute.
+      const backdropColor = Color(0xFF4080C0);
+
+      final layer = DrawingLayer(id: 'marker', name: 'Marker', blendMode: BlendMode.multiply)
+        ..addStroke(_line(_midlinePts, color: red, size: 30));
+      final stack = LayerStack(layers: [layer], size: const Size(100, 100));
+      final backdrop = await _solidColorImage(backdropColor, 100, 100);
+      addTearDown(backdrop.dispose);
+
+      await tester.pumpWidget(_host(
+        DrawingPreview(
+          layerStack: stack,
+          size: const Size(100, 100),
+          backdropImage: backdrop,
+        ),
+      ));
+
+      final pixels = await _renderedPixels(tester);
+      const x = 50, y = 50; // fully covered by the stroke
+
+      expect(_channelAt(pixels, 100, x, y, 0),
+          closeTo(_multiplyChannel(red, backdropColor, 0), 2));
+      expect(_channelAt(pixels, 100, x, y, 1),
+          closeTo(_multiplyChannel(red, backdropColor, 1), 2));
+      expect(_channelAt(pixels, 100, x, y, 2),
+          closeTo(_multiplyChannel(red, backdropColor, 2), 2));
+      expect(_alphaAt(pixels, 100, x, y), 255);
+
+      // Not the flat-paper precompute — proves the backdrop is what
+      // actually drove the result.
+      final flatPaper = resolveStrokeColor(red, BlendMode.multiply);
+      final actualRed = _channelAt(pixels, 100, x, y, 0);
+      expect(actualRed, isNot(closeTo((flatPaper.r * 255).round(), 2)));
+
+      // Outside the stroke, nothing was drawn at all (DrawingPreview only
+      // paints ink — the backdrop's own visible presence is the host's
+      // job, same as before).
+      expect(_alphaAt(pixels, 100, 5, 5), 0);
+    });
+
+    testWidgets(
+        'a sibling layer\'s already-painted pixels are untouched by a '
+        'multiply layer\'s backdrop compositing — only the paper/card '
+        'behind is a blend source, never another layer',
+        (tester) async {
+      const backdropColor = Color(0xFF4080C0);
+      const red = Color(0xFFFF0000);
+
+      // Bottom layer: opaque bright-green stroke, srcOver, covering the
+      // whole probe region.
+      const green = Color(0xFF00FF00);
+      final bottom = DrawingLayer(id: 'bottom', name: 'Bottom')
+        ..addStroke(_line(_midlinePts, color: green, size: 30));
+      // Top layer: multiply blend, red stroke over the SAME pixels.
+      final top = DrawingLayer(id: 'top', name: 'Top', blendMode: BlendMode.multiply)
+        ..addStroke(_line(_midlinePts, color: red, size: 30));
+
+      final stack = LayerStack(layers: [bottom, top], size: const Size(100, 100));
+      final backdrop = await _solidColorImage(backdropColor, 100, 100);
+      addTearDown(backdrop.dispose);
+
+      // Render once with the green bottom layer...
+      await tester.pumpWidget(_host(
+        DrawingPreview(
+          layerStack: stack,
+          size: const Size(100, 100),
+          backdropImage: backdrop,
+        ),
+      ));
+      final withGreenBottom = await _renderedPixels(tester);
+
+      // ...and again with the bottom layer recolored to blue. If the top
+      // (multiply) layer's result changes at all, it was blending against
+      // the bottom layer instead of purely the backdrop.
+      bottom.strokes.clear();
+      bottom.addStroke(_line(_midlinePts, color: const Color(0xFF0000FF), size: 30));
+      stack.markChanged();
+      await tester.pumpWidget(_host(
+        DrawingPreview(
+          layerStack: stack,
+          size: const Size(100, 100),
+          backdropImage: backdrop,
+        ),
+      ));
+      final withBlueBottom = await _renderedPixels(tester);
+
+      const x = 50, y = 50;
+      for (final channel in [0, 1, 2, 3]) {
+        expect(
+          _channelAt(withGreenBottom, 100, x, y, channel),
+          _channelAt(withBlueBottom, 100, x, y, channel),
+          reason: 'channel $channel changed when only the sibling layer '
+              'did — the multiply layer leaked a blend with another '
+              'layer instead of only the backdrop',
+        );
+      }
+
+      // And the top layer's result is the real backdrop multiply, not a
+      // pass-through of the bottom layer's own color (i.e. it's not just
+      // "always shows the top color unmodified" — the backdrop math
+      // actually ran).
+      expect(_channelAt(withGreenBottom, 100, x, y, 0),
+          closeTo(_multiplyChannel(red, backdropColor, 0), 2));
+    });
+
+    testWidgets(
+        'without a backdropImage, multiply still falls back to the exact '
+        '2026-08-06 flat-paper precompute (no regression for callers not '
+        'yet updated)', (tester) async {
+      const red = Color(0xFFFF0000);
+      final layer = DrawingLayer(id: 'marker', name: 'Marker', blendMode: BlendMode.multiply)
+        ..addStroke(_line(_midlinePts, color: red, size: 30));
+      final stack = LayerStack(layers: [layer], size: const Size(100, 100));
+
+      await tester.pumpWidget(_host(
+        DrawingPreview(layerStack: stack, size: const Size(100, 100)),
+      ));
+
+      final pixels = await _renderedPixels(tester);
+      final resolved = resolveStrokeColor(red, BlendMode.multiply);
+      const x = 50, y = 50;
+      expect(_channelAt(pixels, 100, x, y, 0), (resolved.r * 255).round());
+      expect(_channelAt(pixels, 100, x, y, 1), (resolved.g * 255).round());
+      expect(_channelAt(pixels, 100, x, y, 2), (resolved.b * 255).round());
     });
   });
 
