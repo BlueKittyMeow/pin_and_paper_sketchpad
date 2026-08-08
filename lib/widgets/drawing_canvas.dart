@@ -1,7 +1,36 @@
+import 'dart:ui' as ui;
+
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:perfect_freehand/perfect_freehand.dart' as pf;
 import '../models/stroke.dart';
 import '../models/layer.dart';
+import '../rendering/stroke_painter.dart';
+
+/// Imperative handle a host app can use to tell a live [DrawingCanvas] to
+/// discard whatever stroke is currently in progress, without going
+/// through Flutter's raw pointer-cancellation machinery
+/// (`GestureBinding.cancelPointer`).
+///
+/// Added for pinch-to-zoom (owner request, 2026-08-06): a host that wraps
+/// the canvas in some zoom/pan gesture recognizer (e.g. a
+/// `GestureDetector`'s scale gesture, or `InteractiveViewer`) needs to
+/// make sure the first finger's in-progress stroke doesn't silently keep
+/// accumulating (and eventually commit as ink) once a second finger joins
+/// and turns the gesture into a zoom. Calling `GestureBinding.cancelPointer`
+/// on that first finger would work for discarding the stroke, but it ALSO
+/// stops the host's zoom recognizer from tracking that same pointer —
+/// breaking the pinch mid-gesture (verified the hard way: the main app's
+/// own drawing-editor screen hit exactly this, see
+/// `pin-and-paper/lib/screens/drawing_editor_screen.dart`'s
+/// `_handlePolicyPointerDown` doc comment). This controller lets the host
+/// discard the wet stroke on the sketchpad side only, leaving the raw
+/// pointer (and whatever else is listening to it, like a zoom gesture
+/// recognizer) completely alone.
+class DrawingCanvasController extends ChangeNotifier {
+  /// Discard the canvas's in-progress stroke, if any. A no-op if nothing
+  /// is currently being drawn.
+  void cancelActiveStroke() => notifyListeners();
+}
 
 /// The main drawing canvas widget
 class DrawingCanvas extends StatefulWidget {
@@ -13,6 +42,22 @@ class DrawingCanvas extends StatefulWidget {
   final ImageProvider? backgroundImage;
   final bool debugPressure; // Show pressure values for testing
 
+  /// Optional imperative handle — see [DrawingCanvasController]. Null by
+  /// default (no behavior change for hosts that don't need it, e.g. the
+  /// module's own example app).
+  final DrawingCanvasController? controller;
+
+  /// Raster snapshot of whatever real content sits beneath the whole
+  /// drawing (e.g. the card face in the app's drawing editor), in this
+  /// canvas's own capture-space coordinates. When supplied, a
+  /// BlendMode.multiply layer ("Blend"/Marker) composites with a real
+  /// multiply blend against it instead of the flat-paper precompute —
+  /// see the "Backdrop-aware multiply compositing" note in
+  /// `rendering/stroke_painter.dart`. Null (the default) preserves prior
+  /// behavior for hosts that haven't been updated (owner report
+  /// 2026-08-06, fixed 2026-08-07).
+  final ui.Image? backdropImage;
+
   const DrawingCanvas({
     super.key,
     required this.layerStack,
@@ -22,6 +67,8 @@ class DrawingCanvas extends StatefulWidget {
     this.onStrokeComplete,
     this.backgroundImage,
     this.debugPressure = false,
+    this.controller,
+    this.backdropImage,
   });
 
   @override
@@ -32,10 +79,138 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   List<StrokePoint> _currentPoints = [];
   double _lastPressure = 0.0;
 
+  /// Whether this canvas (not the caller) set the stack's capture size.
+  bool _autoStampedSize = false;
+
+  /// Committed strokes baked into one `ui.Picture` per layer, keyed on
+  /// [LayerStack.revision]. During a live stroke only the in-progress
+  /// points are re-tessellated each frame; committed strokes replay
+  /// from these pictures. Same lifecycle discipline as
+  /// `DrawingPreview`: recorded in initState/didUpdateWidget (and at
+  /// stroke commit), disposed in dispose() — never managed in build().
+  List<ui.Picture> _bakedLayerPictures = const [];
+  LayerStack? _bakedStack;
+  int _bakedRevision = -1;
+
+  /// The [DrawingCanvas.backdropImage] baked pictures were built against
+  /// — a multiply layer's picture holds raw stroke colors when this is
+  /// non-null (resolved live against the backdrop each paint) or
+  /// flat-paper-precomputed colors when null, so a change here forces a
+  /// re-bake even though the stack's own content/revision didn't change.
+  ui.Image? _bakedBackdropImage;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncBakedPictures();
+    widget.controller?.addListener(_onControllerCancel);
+  }
+
+  @override
+  void didUpdateWidget(DrawingCanvas oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncBakedPictures();
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller?.removeListener(_onControllerCancel);
+      widget.controller?.addListener(_onControllerCancel);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller?.removeListener(_onControllerCancel);
+    _disposeBakedPictures();
+    super.dispose();
+  }
+
+  /// [DrawingCanvasController.cancelActiveStroke] fired — discard the wet
+  /// stroke exactly like a pointer cancel would, but without touching the
+  /// raw pointer itself (see [DrawingCanvasController]'s doc comment).
+  void _onControllerCancel() => _discardCurrentStroke();
+
+  void _disposeBakedPictures() {
+    for (final picture in _bakedLayerPictures) {
+      picture.dispose();
+    }
+    _bakedLayerPictures = const [];
+  }
+
+  /// Re-bake committed strokes if the stack's content changed.
+  void _syncBakedPictures() {
+    final stack = widget.layerStack;
+    if (identical(_bakedStack, stack) &&
+        _bakedRevision == stack.revision &&
+        identical(_bakedBackdropImage, widget.backdropImage)) {
+      return; // Content unchanged — keep the baked pictures.
+    }
+    _disposeBakedPictures();
+    _bakedLayerPictures = [
+      for (final layer in stack.layers) _bakeLayer(layer),
+    ];
+    _bakedStack = stack;
+    _bakedRevision = stack.revision;
+    _bakedBackdropImage = widget.backdropImage;
+  }
+
+  /// Record one layer's committed strokes (interleaved ink + eraser,
+  /// same order as the un-baked path). saveLayer/opacity/blend are NOT
+  /// part of the picture — they're applied at paint time, so layer
+  /// property changes don't invalidate stroke tessellation.
+  ui.Picture _bakeLayer(DrawingLayer layer) {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    // A multiply layer's blend is resolved live, per-pixel, against
+    // widget.backdropImage at paint time (see paintLayerStack's
+    // _paintMultiplyAgainstBackdrop) whenever one is available — that
+    // needs the stroke's TRUE color baked in, not a precomputed one.
+    // Without a backdrop image, fall back to baking the 2026-08-06
+    // flat-paper precompute exactly as before (resolveStrokeColor), kept
+    // in sync with paintLayerStack's own `backdropImage`-gated choice via
+    // _bakedBackdropImage above.
+    final useBackdrop =
+        layer.blendMode == BlendMode.multiply && widget.backdropImage != null;
+    for (final stroke in layer.strokes) {
+      final resolved = useBackdrop
+          ? stroke.color
+          : resolveStrokeColor(stroke.color, layer.blendMode);
+      drawFreehandStroke(
+        canvas,
+        stroke.points,
+        stroke.options,
+        paint: stroke.isEraser ? eraserPaint() : inkPaint(resolved),
+      );
+    }
+    return recorder.endRecording();
+  }
+
+  /// The pointer currently drawing the in-progress stroke. Events from any
+  /// other pointer (second finger, resting palm) are ignored so they cannot
+  /// interleave points into the active stroke.
+  int? _activePointer;
+  PointerDeviceKind? _activePointerKind;
+
+  static bool _isStylus(PointerDeviceKind? kind) =>
+      kind == PointerDeviceKind.stylus ||
+      kind == PointerDeviceKind.invertedStylus;
+
   void _onPointerDown(PointerDownEvent event) {
-    final pressure = _normalizePressure(event.pressure);
+    if (_activePointer != null) {
+      // Palm rejection: a stylus touching down cancels an in-progress
+      // touch stroke (the "stroke" was almost certainly a resting palm).
+      if (_isStylus(event.kind) && !_isStylus(_activePointerKind)) {
+        _discardCurrentStroke();
+      } else {
+        // A second finger (or a palm while the stylus draws): ignore it.
+        return;
+      }
+    }
+
+    _activePointer = event.pointer;
+    _activePointerKind = event.kind;
+
+    final pressure = _normalizePressure(event);
     _lastPressure = pressure;
-    
+
     setState(() {
       _currentPoints = [
         StrokePoint(
@@ -53,7 +228,9 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   }
 
   void _onPointerMove(PointerMoveEvent event) {
-    final pressure = _normalizePressure(event.pressure);
+    if (event.pointer != _activePointer) return;
+
+    final pressure = _normalizePressure(event);
     _lastPressure = pressure;
 
     setState(() {
@@ -72,6 +249,11 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   }
 
   void _onPointerUp(PointerUpEvent event) {
+    if (event.pointer != _activePointer) return;
+
+    _activePointer = null;
+    _activePointerKind = null;
+
     if (_currentPoints.isEmpty) return;
 
     final stroke = Stroke(
@@ -82,8 +264,11 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     );
 
     widget.layerStack.addStrokeToActiveLayer(stroke);
-    
+
     setState(() {
+      // Fold the freshly committed stroke into the baked pictures now —
+      // setState alone rebuilds this State without didUpdateWidget.
+      _syncBakedPictures();
       _currentPoints = [];
     });
 
@@ -94,25 +279,89 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     }
   }
 
-  /// Normalize pressure value - handles devices that don't report pressure
-  double _normalizePressure(double pressure) {
-    // pressure == 0 often means "not supported" or "not pressed"
-    // pressure == 1 is sometimes the default for non-pressure devices
-    // S-Pen should report actual 0.0-1.0 values
-    
-    if (pressure == 0.0 || pressure == 1.0) {
-      // Likely no pressure support, use default
-      return 0.5;
+  void _onPointerCancel(PointerCancelEvent event) {
+    if (event.pointer != _activePointer) return;
+    // System cancelled the pointer (palm gesture, notification shade, app
+    // switch): discard the in-progress stroke deliberately.
+    _discardCurrentStroke();
+  }
+
+  void _discardCurrentStroke() {
+    _activePointer = null;
+    _activePointerKind = null;
+    setState(() {
+      _currentPoints = [];
+    });
+  }
+
+  /// Normalize pressure per-device.
+  ///
+  /// A real stylus reports meaningful pressure — trust it (including an
+  /// honest 1.0 at max press; the old heuristic snapped that to 0.5).
+  ///
+  /// FINGER pressure is trusted too (owner decision 2026-08-06): phone
+  /// digitizers report real contact pressure and the resulting organic
+  /// width variation is wanted — the earlier hard 0.5 pin threw the
+  /// marker's pressure feel away along with the noise. The one recorded
+  /// pathological case (a stroke collapsing to threads, "purple thinner"
+  /// video 2026-08-05) was diagnosed as one-off reading weirdness —
+  /// owner's leading theory: the case magnet skewing the digitizer — and
+  /// the owner explicitly chose NO artificial floor; if it recurs, see
+  /// the protocol note in pin-and-paper docs/FEATURE_REQUESTS.md.
+  ///
+  /// Mouse/trackpad report nothing meaningful, so they get a neutral
+  /// 0.5; a non-positive reading on any device means "no data", not
+  /// "zero press", and falls back the same way.
+  double _normalizePressure(PointerEvent event) {
+    if (_isStylus(event.kind) || event.kind == PointerDeviceKind.touch) {
+      final range = event.pressureMax - event.pressureMin;
+      final p = range > 0
+          ? (event.pressure - event.pressureMin) / range
+          : event.pressure;
+      if (p <= 0) return 0.5;
+      return p.clamp(0.0, 1.0);
     }
-    return pressure.clamp(0.0, 1.0);
+    return 0.5;
+  }
+
+  /// Stamp the stack's capture-space size from the canvas's laid-out
+  /// dimensions, so a fresh `LayerStack()` can serialize without the
+  /// editor remembering to set [LayerStack.size] by hand. Strokes are
+  /// recorded in this canvas's local coordinates, so its laid-out size
+  /// IS the capture space.
+  ///
+  /// An explicitly caller-set size is never overwritten. While the
+  /// stack is still empty, a re-layout (e.g. device rotation before the
+  /// first stroke) re-stamps so the capture space matches where strokes
+  /// actually land; once strokes exist the size is frozen.
+  void _stampCaptureSize(Size laidOut) {
+    if (!laidOut.isFinite || laidOut.isEmpty) return;
+    final stack = widget.layerStack;
+    if (stack.size == null) {
+      stack.size = laidOut;
+      _autoStampedSize = true;
+    } else if (_autoStampedSize &&
+        stack.size != laidOut &&
+        stack.layers.every((l) => l.strokes.isEmpty)) {
+      stack.size = laidOut;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, constraints) {
+      _stampCaptureSize(constraints.biggest);
+      return _buildCanvas();
+    });
+  }
+
+  Widget _buildCanvas() {
     return Listener(
+      behavior: HitTestBehavior.opaque,
       onPointerDown: _onPointerDown,
       onPointerMove: _onPointerMove,
       onPointerUp: _onPointerUp,
+      onPointerCancel: _onPointerCancel,
       child: Stack(
         children: [
           // Background image (card texture)
@@ -129,10 +378,13 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
             child: CustomPaint(
               painter: _DrawingPainter(
                 layerStack: widget.layerStack,
+                revision: widget.layerStack.revision,
+                bakedLayerPictures: _bakedLayerPictures,
                 currentPoints: _currentPoints,
                 currentColor: widget.currentColor,
                 strokeOptions: widget.strokeOptions,
                 isEraserActive: widget.isEraserActive,
+                backdropImage: widget.backdropImage,
               ),
               isComplex: true,
               willChange: true,
@@ -168,126 +420,62 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   }
 }
 
-/// CustomPainter that renders all layers and strokes
+/// CustomPainter that composites the baked committed-stroke pictures
+/// and tessellates ONLY the in-progress stroke live.
 class _DrawingPainter extends CustomPainter {
   final LayerStack layerStack;
+  final int revision;
+  final List<ui.Picture> bakedLayerPictures;
   final List<StrokePoint> currentPoints;
+
+  /// [currentPoints] is mutated in place during a stroke; the count
+  /// captured at construction lets [shouldRepaint] see growth.
+  final int currentPointCount;
   final Color currentColor;
   final StrokeOptions strokeOptions;
   final bool isEraserActive;
+  final ui.Image? backdropImage;
 
   _DrawingPainter({
     required this.layerStack,
+    required this.revision,
+    required this.bakedLayerPictures,
     required this.currentPoints,
     required this.currentColor,
     required this.strokeOptions,
     this.isEraserActive = false,
-  });
+    this.backdropImage,
+  }) : currentPointCount = currentPoints.length;
 
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Rect.fromLTWH(0, 0, size.width, size.height);
 
-    // Render each visible layer
-    for (final layer in layerStack.visibleLayers) {
-      // Save canvas state for layer opacity/blend
-      canvas.saveLayer(
-        rect,
-        Paint()
-          ..color = Colors.white.withOpacity(layer.opacity)
-          ..blendMode = layer.blendMode,
-      );
-
-      // Draw strokes interleaved — eraser strokes use dstOut to cut holes
-      for (final stroke in layer.strokes) {
-        if (stroke.isEraser) {
-          _drawStroke(canvas, stroke.points, stroke.options,
-              paint: Paint()
-                ..blendMode = BlendMode.dstOut
-                ..color = Colors.white
-                ..style = PaintingStyle.fill
-                ..isAntiAlias = true);
-        } else {
-          _drawStroke(canvas, stroke.points, stroke.options,
-              paint: Paint()
-                ..color = stroke.color
-                ..style = PaintingStyle.fill
-                ..isAntiAlias = true);
-        }
-      }
-
-      // Draw current stroke in-progress inside its own layer
-      final isActiveLayer = layer == layerStack.activeLayer;
-      if (isActiveLayer && currentPoints.isNotEmpty) {
-        if (isEraserActive) {
-          _drawStroke(canvas, currentPoints, strokeOptions,
-              paint: Paint()
-                ..blendMode = BlendMode.dstOut
-                ..color = Colors.white
-                ..style = PaintingStyle.fill
-                ..isAntiAlias = true);
-        } else {
-          _drawStroke(canvas, currentPoints, strokeOptions,
-              paint: Paint()
-                ..color = currentColor
-                ..style = PaintingStyle.fill
-                ..isAntiAlias = true);
-        }
-      }
-
-      canvas.restore();
-    }
-  }
-
-  void _drawStroke(
-    Canvas canvas,
-    List<StrokePoint> points,
-    StrokeOptions options, {
-    required Paint paint,
-  }) {
-    if (points.isEmpty) return;
-
-    // Convert to perfect_freehand input format
-    final pfPoints = points
-        .map((p) => pf.PointVector(p.x, p.y, p.pressure))
-        .toList();
-
-    // Get the outline points from perfect_freehand
-    final outlinePoints = pf.getStroke(
-      pfPoints,
-      options: pf.StrokeOptions(
-        size: options.size,
-        thinning: options.thinning,
-        smoothing: options.smoothing,
-        streamline: options.streamline,
-        start: pf.StrokeEndOptions.start(
-          customTaper: options.taperStart > 0 ? options.taperStart : null,
-          taperEnabled: options.taperStart > 0,
-        ),
-        end: pf.StrokeEndOptions.end(
-          customTaper: options.taperEnd > 0 ? options.taperEnd : null,
-          taperEnabled: options.taperEnd > 0,
-        ),
-        simulatePressure: options.simulatePressure,
-      ),
+    paintLayerStack(
+      canvas,
+      layerStack,
+      rect,
+      inProgressPoints: currentPoints,
+      inProgressColor: currentColor,
+      inProgressOptions: strokeOptions,
+      inProgressIsEraser: isEraserActive,
+      bakedLayerPictures:
+          bakedLayerPictures.length == layerStack.layers.length
+              ? bakedLayerPictures
+              : null,
+      backdropImage: backdropImage,
     );
-
-    if (outlinePoints.isEmpty) return;
-
-    // Build path from outline points
-    final path = Path();
-    path.moveTo(outlinePoints.first.dx, outlinePoints.first.dy);
-
-    for (int i = 1; i < outlinePoints.length; i++) {
-      path.lineTo(outlinePoints[i].dx, outlinePoints[i].dy);
-    }
-    path.close();
-
-    canvas.drawPath(path, paint);
   }
 
   @override
-  bool shouldRepaint(_DrawingPainter oldDelegate) {
-    return true; // Always repaint during active drawing
-  }
+  bool shouldRepaint(_DrawingPainter oldDelegate) =>
+      oldDelegate.revision != revision ||
+      !identical(oldDelegate.layerStack, layerStack) ||
+      !identical(oldDelegate.bakedLayerPictures, bakedLayerPictures) ||
+      !identical(oldDelegate.currentPoints, currentPoints) ||
+      oldDelegate.currentPointCount != currentPointCount ||
+      oldDelegate.currentColor != currentColor ||
+      oldDelegate.strokeOptions != strokeOptions ||
+      oldDelegate.isEraserActive != isEraserActive ||
+      !identical(oldDelegate.backdropImage, backdropImage);
 }

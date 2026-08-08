@@ -1,5 +1,5 @@
 name: pin_and_paper_sketchpad
-description: Drawing prototype for Pin and Paper - testing S-Pen pressure and stroke rendering
+description: Pressure-sensitive drawing engine for Pin and Paper - layered strokes, serialization, and card-embeddable rendering
 publish_to: 'none'
 version: 0.1.0
 

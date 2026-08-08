@@ -1,8 +1,5 @@
 import 'package:flutter/material.dart';
-import 'models/stroke.dart';
-import 'models/layer.dart';
-import 'widgets/drawing_canvas.dart';
-import 'widgets/toolbar.dart';
+import 'package:pin_and_paper_sketchpad/sketchpad.dart';
 
 void main() {
   runApp(const SketchpadApp());
@@ -51,7 +48,13 @@ class _SketchpadScreenState extends State<SketchpadScreen> {
 
   void _handleUndo() {
     setState(() {
-      _layerStack.undoOnActiveLayer();
+      _layerStack.undo();
+    });
+  }
+
+  void _handleRedo() {
+    setState(() {
+      _layerStack.redo();
     });
   }
 
@@ -69,7 +72,7 @@ class _SketchpadScreenState extends State<SketchpadScreen> {
           TextButton(
             onPressed: () {
               setState(() {
-                _layerStack.activeLayer.clear();
+                _layerStack.clearActiveLayer();
               });
               Navigator.pop(context);
             },
@@ -114,11 +117,14 @@ class _SketchpadScreenState extends State<SketchpadScreen> {
                 isEraserActive: _eraserActive,
                 debugPressure: _debugPressure,
                 onStrokeComplete: () => setState(() {}),
-                backgroundImage: const AssetImage('assets/AP11.jpg'),
+                backgroundImage: const AssetImage(
+                  'assets/AP11.jpg',
+                  package: 'pin_and_paper_sketchpad',
+                ),
               ),
             ),
           ),
-          
+
           // Toolbar
           DrawingToolbar(
             layerStack: _layerStack,
@@ -151,6 +157,9 @@ class _SketchpadScreenState extends State<SketchpadScreen> {
               });
             },
             onUndo: _handleUndo,
+            canUndo: _layerStack.canUndo,
+            onRedo: _handleRedo,
+            canRedo: _layerStack.canRedo,
             onClear: _handleClear,
           ),
         ],
